@@ -43,8 +43,21 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     const repo = original_host["https://github.com/".len..];
     const url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, path });
     defer allocator.free(url);
+
     std.debug.print("url={s}\n", .{url});
     _ = line_numbers;
+
+    var out_buffer: [1025000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out_buffer);
+
+    var client = std.http.Client{ .allocator = allocator };
+    const status_code = try client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &writer,
+    });
+
+    std.debug.print("code={}\n", .{status_code});
+    std.debug.print("out_buffer={s}\n", .{out_buffer});
 }
 
 pub fn main() !void {
