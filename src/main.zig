@@ -48,12 +48,12 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     _ = line_numbers;
 
     var allocating = std.Io.Writer.Allocating.init(allocator);
-    var writer = allocating.writer;
+    const writer = &allocating.writer;
 
     var client = std.http.Client{ .allocator = allocator };
     const status_code = try client.fetch(.{
         .location = .{ .url = url },
-        .response_writer = &writer,
+        .response_writer = writer,
     });
 
     std.debug.print("code={}\n", .{status_code});
