@@ -37,27 +37,54 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
     const original_url = url_parts.next().?;
     const line_numbers = url_parts.rest();
+    _ = line_numbers;
     var blob_it = std.mem.splitSequence(u8, original_url, "/blob/");
     const original_host = blob_it.next().?;
-    const path = blob_it.next().?;
+    const sha_with_path = blob_it.next().?;
+    var path_parts = std.mem.splitScalar(u8, sha_with_path, '/');
+    _ = path_parts.next(); // skip sha
+    const path = path_parts.rest();
     const repo = original_host["https://github.com/".len..];
-    const url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, path });
-    defer allocator.free(url);
+    const old_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, sha_with_path });
+    defer allocator.free(old_url);
+    const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/main/{s}", .{ repo, path });
+    defer allocator.free(new_url);
 
-    std.debug.print("url={s}\n", .{url});
-    _ = line_numbers;
+    const old_file = try fetchFile(allocator, old_url);
+    defer allocator.free(old_file);
 
+    const new_file = try fetchFile(allocator, old_url);
+    defer allocator.free(new_file);
+
+    std.debug.print("old_file: {s}\n", .{old_file});
+    std.debug.print("new_file: {s}\n", .{new_file});
+
+    //var lines = std.mem.splitScalar(u8, line_numbers, '-');
+    //const start_str = std.mem.trim(u8, lines.next().?, "L");
+    //const end_str = std.mem.trim(u8, lines.next().?, "L");
+    //const start = try std.fmt.parseInt(usize, start_str, 10);
+    //const end = try std.fmt.parseInt(usize, end_str, 10);
+
+    //var file_lines = std.mem.splitScalar(u8, full_file, '\n');
+    //var i: usize = 1; // line numbers start at 1
+    //while (file_lines.next()) |line| : (i += 1) {
+    //    if (i >= start and i <= end) {
+    //        std.debug.print("{s}\n", .{line});
+    //    }
+    //}
+}
+
+fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     const writer = &allocating.writer;
 
     var client = std.http.Client{ .allocator = allocator };
-    const status_code = try client.fetch(.{
+    _ = try client.fetch(.{
         .location = .{ .url = url },
         .response_writer = writer,
     });
 
-    std.debug.print("code={}\n", .{status_code});
-    std.debug.print("out_buffer={s}\n", .{try allocating.toOwnedSlice()});
+    return try allocating.toOwnedSlice();
 }
 
 pub fn main() !void {
