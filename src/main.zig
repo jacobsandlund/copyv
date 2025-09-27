@@ -8,8 +8,6 @@ fn doStuff(allocator: std.mem.Allocator, dir: std.fs.Dir) !void {
     while (try it.next()) |entry| {
         if (entry.name.len > 1 and entry.name[0] == '.') continue;
 
-        std.debug.print("entry.name={s}\n", .{entry.name});
-
         if (entry.kind == .directory) {
             var subdir = try dir.openDir(entry.name, .{ .iterate = true });
             defer subdir.close();
@@ -20,8 +18,33 @@ fn doStuff(allocator: std.mem.Allocator, dir: std.fs.Dir) !void {
             var file_rdr = file.reader(&buff);
             var rdr = &file_rdr.interface;
             const bytes = try rdr.allocRemaining(allocator, .unlimited);
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \t");
+                if (std.mem.startsWith(u8, trimmed, URL_TAG)) {
+                    try doMoreStuff(allocator, trimmed);
+                }
+            }
         }
     }
+}
+
+fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
+    var parts = std.mem.splitScalar(u8, original_line, ':');
+    _ = parts.next(); // skip copyv
+    const url_with_line_numbers = std.mem.trim(u8, parts.rest(), " \t");
+    var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
+    const original_url = url_parts.next().?;
+    const line_numbers = url_parts.rest();
+    var blob_it = std.mem.splitSequence(u8, original_url, "/blob/");
+    const original_host = blob_it.next().?;
+    const path = blob_it.next().?;
+    const repo = original_host["https://github.com/".len..];
+    const url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, path });
+    defer allocator.free(url);
+    std.debug.print("url={s}\n", .{url});
+    _ = line_numbers;
 }
 
 pub fn main() !void {
