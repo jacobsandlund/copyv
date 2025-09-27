@@ -37,7 +37,6 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
     const original_url = url_parts.next().?;
     const line_numbers = url_parts.rest();
-    _ = line_numbers;
     var blob_it = std.mem.splitSequence(u8, original_url, "/blob/");
     const original_host = blob_it.next().?;
     const sha_with_path = blob_it.next().?;
@@ -68,31 +67,44 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     try child_proc.spawn();
     try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
     const stdout_slice = try stdout.toOwnedSlice(allocator);
-    const stderr_slice = try stderr.toOwnedSlice(allocator);
     const exit_code = try child_proc.wait();
+    _ = exit_code;
 
-    std.debug.print("exit: {}\nstdout:\n{s}\nstderr:\n{s}\n", .{
-        exit_code,
-        stdout_slice,
-        stderr_slice,
-    });
+    var lines = std.mem.splitScalar(u8, line_numbers, '-');
+    const start_str = std.mem.trim(u8, lines.next().?, "L");
+    const end_str = std.mem.trim(u8, lines.next().?, "L");
+    const start = try std.fmt.parseInt(usize, start_str, 10);
+    const end = try std.fmt.parseInt(usize, end_str, 10);
 
-    // std.debug.print("old_file: {s}\n", .{old_file});
-    // std.debug.print("new_file: {s}\n", .{new_file});
+    var diff_lines = std.mem.splitScalar(u8, stdout_slice, '\n');
+    var should_print = false;
+    while (diff_lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "@@")) {
+            const trimmed = std.mem.trim(u8, line["@@".len..], " \t");
+            var header_parts = std.mem.splitScalar(u8, trimmed, ' ');
+            const old_range = header_parts.next().?;
+            var range_parts = std.mem.splitScalar(u8, old_range, ',');
+            const range_start_str = range_parts.next().?;
+            const diff_start = try std.fmt.parseInt(usize, range_start_str["-".len..], 10);
+            const range_len_str = range_parts.next().?;
+            const len = try std.fmt.parseInt(usize, range_len_str, 10);
+            const diff_end = diff_start + len;
 
-    //var lines = std.mem.splitScalar(u8, line_numbers, '-');
-    //const start_str = std.mem.trim(u8, lines.next().?, "L");
-    //const end_str = std.mem.trim(u8, lines.next().?, "L");
-    //const start = try std.fmt.parseInt(usize, start_str, 10);
-    //const end = try std.fmt.parseInt(usize, end_str, 10);
+            if ((diff_start <= start and end <= diff_end) or
+                (start <= diff_start and diff_end <= end) or
+                (diff_start < start and start < diff_end) or
+                (start < diff_start and diff_start < end))
+            {
+                should_print = true;
+            } else {
+                should_print = false;
+            }
+        }
 
-    //var file_lines = std.mem.splitScalar(u8, full_file, '\n');
-    //var i: usize = 1; // line numbers start at 1
-    //while (file_lines.next()) |line| : (i += 1) {
-    //    if (i >= start and i <= end) {
-    //        std.debug.print("{s}\n", .{line});
-    //    }
-    //}
+        if (should_print) {
+            std.debug.print("{s}\n", .{line});
+        }
+    }
 }
 
 fn fetchFile(allocator: std.mem.Allocator, url: []const u8, path: []const u8) !void {
