@@ -50,8 +50,32 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/main/{s}", .{ repo, path });
     defer allocator.free(new_url);
 
-    try fetchFile(allocator, old_url, "tmp/old_file");
-    try fetchFile(allocator, old_url, "tmp/new_file");
+    const old_file_name = "tmp/old_file";
+    const new_file_name = "tmp/new_file";
+
+    try fetchFile(allocator, old_url, old_file_name);
+    try fetchFile(allocator, new_url, new_file_name);
+
+    var stderr = std.ArrayList(u8).empty;
+    var stdout = std.ArrayList(u8).empty;
+
+    var child_proc = std.process.Child.init(
+        &[_][]const u8{ "git", "diff", "--no-index", old_file_name, new_file_name },
+        allocator,
+    );
+    child_proc.stdout_behavior = .Pipe;
+    child_proc.stderr_behavior = .Pipe;
+    try child_proc.spawn();
+    try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
+    const stdout_slice = try stdout.toOwnedSlice(allocator);
+    const stderr_slice = try stderr.toOwnedSlice(allocator);
+    const exit_code = try child_proc.wait();
+
+    std.debug.print("exit: {}\nstdout:\n{s}\nstderr:\n{s}\n", .{
+        exit_code,
+        stdout_slice,
+        stderr_slice,
+    });
 
     // std.debug.print("old_file: {s}\n", .{old_file});
     // std.debug.print("new_file: {s}\n", .{new_file});
