@@ -1,25 +1,19 @@
 const std = @import("std");
 
-pub fn main() !void {
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-}
+fn doStuff(dir: std.fs.Dir) !void {
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.name.len > 1 and entry.name[0] == '.') continue;
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+        std.debug.print("entry.name={s}\n", .{entry.name});
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
+        if (entry.kind == .directory) {
+            try doStuff(try dir.openDir(entry.name, .{ .iterate = true }));
         }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    }
+}
+
+pub fn main() !void {
+    const dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
+    try doStuff(dir);
 }
