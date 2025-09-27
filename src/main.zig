@@ -50,14 +50,11 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/main/{s}", .{ repo, path });
     defer allocator.free(new_url);
 
-    const old_file = try fetchFile(allocator, old_url);
-    defer allocator.free(old_file);
+    try fetchFile(allocator, old_url, "tmp/old_file");
+    try fetchFile(allocator, old_url, "tmp/new_file");
 
-    const new_file = try fetchFile(allocator, old_url);
-    defer allocator.free(new_file);
-
-    std.debug.print("old_file: {s}\n", .{old_file});
-    std.debug.print("new_file: {s}\n", .{new_file});
+    // std.debug.print("old_file: {s}\n", .{old_file});
+    // std.debug.print("new_file: {s}\n", .{new_file});
 
     //var lines = std.mem.splitScalar(u8, line_numbers, '-');
     //const start_str = std.mem.trim(u8, lines.next().?, "L");
@@ -74,17 +71,18 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     //}
 }
 
-fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
-    var allocating = std.Io.Writer.Allocating.init(allocator);
-    const writer = &allocating.writer;
+fn fetchFile(allocator: std.mem.Allocator, url: []const u8, path: []const u8) !void {
+    var file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&buffer);
+    const writer = &file_writer.interface;
 
     var client = std.http.Client{ .allocator = allocator };
     _ = try client.fetch(.{
         .location = .{ .url = url },
         .response_writer = writer,
     });
-
-    return try allocating.toOwnedSlice();
 }
 
 pub fn main() !void {
