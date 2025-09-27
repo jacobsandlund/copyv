@@ -47,8 +47,8 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     std.debug.print("url={s}\n", .{url});
     _ = line_numbers;
 
-    var out_buffer: [1025000]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&out_buffer);
+    var allocating = std.Io.Writer.Allocating.init(allocator);
+    var writer = allocating.writer;
 
     var client = std.http.Client{ .allocator = allocator };
     const status_code = try client.fetch(.{
@@ -57,7 +57,7 @@ fn doMoreStuff(allocator: std.mem.Allocator, original_line: []const u8) !void {
     });
 
     std.debug.print("code={}\n", .{status_code});
-    std.debug.print("out_buffer={s}\n", .{out_buffer});
+    std.debug.print("out_buffer={s}\n", .{try allocating.toOwnedSlice()});
 }
 
 pub fn main() !void {
