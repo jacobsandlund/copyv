@@ -2,6 +2,7 @@
 fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));
 
+    // I've added a comment here, this should stay.
     const f = self.data_f orelse return;
     var r = std.io.bufferedReader(f.reader());
     var d: UTF8Decoder = .{};
@@ -14,9 +15,9 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
         if (n == 0) break; // EOF reached
 
         for (buf[0..n]) |c| {
-            const cp_, const consumed = d.next(c);
+            const cp_opt, const consumed = d.next(c);
             assert(consumed);
-            if (cp_) |cp| {
+            if (cp_opt) |cp| {
                 // This is the same trick we do in terminal.zig so we
                 // keep it here.
                 const width = if (cp <= 0xFF)
@@ -31,3 +32,4 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
         }
     }
 }
+// copyv: end
