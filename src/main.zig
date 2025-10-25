@@ -1,5 +1,12 @@
 const std = @import("std");
 
+const Action = enum {
+    pull,
+    get,
+    get_frozen,
+    check_frozen,
+};
+
 fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir) !void {
     var it = dir.iterate();
     while (try it.next()) |entry| {
@@ -10,7 +17,8 @@ fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir) !void {
             defer subdir.close();
             try recursivelyUpdate(arena, subdir);
         } else if (entry.kind == .file) {
-            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zig") and
+                !std.mem.endsWith(u8, entry.name, ".jl")) continue;
 
             const allocator = arena.allocator();
             try updateFile(allocator, dir, entry.name);
@@ -107,36 +115,97 @@ fn updateChunk(
     const trimmed = std.mem.trim(u8, current_line, " \t");
     var parts = std.mem.splitScalar(u8, trimmed, ':');
     _ = parts.next(); // skip copyv
-    const url_with_line_numbers = std.mem.trim(u8, parts.rest(), " \t");
+    const line_payload = std.mem.trim(u8, parts.rest(), " \t");
+    var line_args = std.mem.splitScalar(u8, line_payload, ' ');
+    const first_arg = line_args.first();
+    var action: Action = undefined;
+    var url_with_line_numbers: []const u8 = undefined;
+
+    if (std.mem.startsWith(u8, first_arg, "g")) { // get, go, g
+        if (line_args.peek()) |peek| {
+            if (std.mem.startsWith(u8, peek, "fr")) { // freeze, frozen, fr
+                action = .get_frozen;
+                _ = line_args.next(); // skip fr[ozen]
+            } else {
+                action = .get;
+            }
+        } else {
+            std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{ file_name, start_line_number });
+        }
+        url_with_line_numbers = line_args.rest();
+    } else if (std.mem.startsWith(u8, first_arg, "fr")) { // freeze, frozen, fr
+        action = .check_frozen;
+        url_with_line_numbers = line_args.rest();
+    } else {
+        action = .pull;
+        url_with_line_numbers = first_arg;
+        std.debug.assert(std.mem.eql(u8, line_args.rest(), ""));
+    }
+
     var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
     const original_url = url_parts.next().?;
     const line_numbers_str = url_parts.rest();
     var blob_it = std.mem.splitSequence(u8, original_url, "/blob/");
     const original_host = blob_it.next().?;
-    const sha_with_path = blob_it.next().?;
-    var path_parts = std.mem.splitScalar(u8, sha_with_path, '/');
-    _ = path_parts.next(); // skip sha
+    const ref_with_path = blob_it.next().?;
+    var path_parts = std.mem.splitScalar(u8, ref_with_path, '/');
+    const ref = path_parts.next().?;
+
+    if (action == .check_frozen) {
+        if (ref.len != 40) {
+            std.debug.panic("{s}[{d}]: Frozen copyv line must point to a commit SHA\n", .{
+                file_name,
+                start_line_number,
+            });
+        }
+        return false;
+    }
+
     const path = path_parts.rest();
     const repo = original_host["https://github.com/".len..];
-    const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, sha_with_path });
+    var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
+    const base_start_str = std.mem.trim(u8, line_numbers.next().?, "L");
+    const base_end_str = std.mem.trim(u8, line_numbers.next().?, "L");
+    const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
+    const base_end = try std.fmt.parseInt(usize, base_end_str, 10);
+
+    const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
     defer allocator.free(base_url);
+    const base_file_bytes = try fetchFile(allocator, base_url);
 
-    // Fetch latest commit SHA from GitHub API
-    const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/HEAD", .{repo});
-    defer allocator.free(api_url);
-    const latest_sha = try fetchLatestCommitSha(allocator, api_url);
+    if (action == .get_frozen) {
+        const frozen_sha = if (ref.len == 40)
+            ref
+        else
+            try fetchLatestCommitSha(allocator, repo, ref);
+        const base_bytes = try getLines(base_file_bytes, base_start, base_end);
+        const updated_line = try std.fmt.allocPrint(
+            allocator,
+            "// copyv: frozen {s}/blob/{s}/{s}#{s}",
+            .{ original_host, frozen_sha, path, line_numbers_str },
+        );
+        defer allocator.free(updated_line);
+        try updated_bytes.appendSlice(allocator, updated_line);
+        try updated_bytes.append(allocator, '\n');
+        try updated_bytes.appendSlice(allocator, base_bytes);
+
+        try maybeAppendNewline(updated_bytes, allocator, lines);
+
+        return true;
+    }
+
+    const latest_sha = try fetchLatestCommitSha(allocator, repo, ref);
     defer allocator.free(latest_sha);
-
     const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}/{s}", .{ repo, latest_sha, path });
     defer allocator.free(new_url);
+    const new_file_bytes = try fetchFile(allocator, new_url);
+
+    // Diff the files
 
     const base_file_name = "tmp/base_file";
     const new_file_name = "tmp/new_file";
-
-    const base_file_bytes = try fetchFile(allocator, base_url, base_file_name);
-    const new_file_bytes = try fetchFile(allocator, new_url, new_file_name);
-
-    // Diff the files
+    try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_file_bytes });
+    try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_file_bytes });
 
     var stderr = std.ArrayList(u8).empty;
     var stdout = std.ArrayList(u8).empty;
@@ -154,12 +223,6 @@ fn updateChunk(
 
     // Check if diff is in the chunk
 
-    var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
-    const base_start_str = std.mem.trim(u8, line_numbers.next().?, "L");
-    const base_end_str = std.mem.trim(u8, line_numbers.next().?, "L");
-    const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
-    const base_end = try std.fmt.parseInt(usize, base_end_str, 10);
-
     var diff_lines = std.mem.splitScalar(u8, stdout_slice, '\n');
     var base_line: usize = 0;
     var new_line: usize = 0;
@@ -167,7 +230,8 @@ fn updateChunk(
     var new_end: usize = 0;
     var base_range: GitRange = .{ .start = 0, .len = 0 };
     var new_range: GitRange = .{ .start = 0, .len = 0 };
-    var has_diff = false;
+    var has_diff_in_chunk = false;
+    var last_diff_delta: isize = 0;
 
     for (0..4) |_| _ = diff_lines.next(); // Skip diff header
 
@@ -181,6 +245,7 @@ fn updateChunk(
             new_range = try parseRange(header_parts.next().?);
             base_line = base_range.start;
             new_line = new_range.start;
+            last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
             const base_range_end = base_range.start + base_range.len;
 
             if ((base_line <= base_start and base_end <= base_range_end) or
@@ -188,7 +253,7 @@ fn updateChunk(
                 (base_line < base_start and base_start < base_range_end) or
                 (base_start < base_line and base_line < base_end))
             {
-                has_diff = true;
+                has_diff_in_chunk = true;
             }
 
             if (new_start == 0 and base_line > base_start) {
@@ -218,7 +283,7 @@ fn updateChunk(
         }
     }
 
-    if (has_diff) {
+    if (has_diff_in_chunk) {
         // We've at least set the start because the diff affected the chunk
         std.debug.assert(new_start != 0);
 
@@ -229,88 +294,99 @@ fn updateChunk(
             new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
         }
     } else {
-        std.debug.assert((new_start == 0 and new_end == 0) or
-            (new_end - new_start == base_end - base_start));
+        // None of the diffs affected the chunk
+
+        if (new_start == 0) {
+            std.debug.assert(new_end == 0);
+            new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
+            new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
+        } else {
+            std.debug.assert(new_end - new_start == base_end - base_start);
+        }
     }
 
     // Write base and new files
 
-    const base_bytes = try writeLines(base_file_bytes, base_file_name, base_start, base_end);
-    const new_bytes = try writeLines(new_file_bytes, new_file_name, new_start, new_end);
+    const base_bytes = try getLines(base_file_bytes, base_start, base_end);
+    std.debug.print("new_file_bytes.len = {d}, new_start = {d}, new_end = {d}\n", .{ new_file_bytes.len, new_start, new_end });
+    const new_bytes = try getLines(new_file_bytes, new_start, new_end);
+    try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_bytes });
+    try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_bytes });
 
-    // Get the current chunk
-
-    const chunk_len = base_end - base_start + 1;
-    const current_bytes = lines.buffer;
-    const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
-    var line_number = start_line_number;
+    var updated_chunk: []const u8 = new_bytes;
     var include_end_tag = false;
 
-    const current_end = for (0..chunk_len - 1) |_| {
-        if (lines.next()) |line| {
-            line_number += 1;
-            if (matchesEndTag(file_name, line_number, line)) {
-                include_end_tag = true;
-                break line.ptr - current_bytes.ptr - 1;
-            }
-        } else break null;
-    } else end_blk: {
-        const maybe_end = maybe_blk: {
+    // Get the current chunk
+    if (action == .pull) {
+        const chunk_len = base_end - base_start + 1;
+        const current_bytes = lines.buffer;
+        const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
+        var line_number = start_line_number;
+
+        const current_end = for (0..chunk_len - 1) |_| {
             if (lines.next()) |line| {
                 line_number += 1;
                 if (matchesEndTag(file_name, line_number, line)) {
                     include_end_tag = true;
-                    break :end_blk line.ptr - current_bytes.ptr - 1;
-                } else {
-                    break :maybe_blk line.ptr - current_bytes.ptr + line.len;
+                    break line.ptr - current_bytes.ptr - 1;
                 }
-            } else break :end_blk null;
+            } else break null;
+        } else end_blk: {
+            const maybe_end = maybe_blk: {
+                if (lines.next()) |line| {
+                    line_number += 1;
+                    if (matchesEndTag(file_name, line_number, line)) {
+                        include_end_tag = true;
+                        break :end_blk line.ptr - current_bytes.ptr - 1;
+                    } else {
+                        break :maybe_blk line.ptr - current_bytes.ptr + line.len;
+                    }
+                } else break :end_blk null;
+            };
+
+            const maybe_chunk = current_bytes[current_start..maybe_end];
+            if (std.mem.eql(u8, maybe_chunk, base_bytes)) {
+                break :end_blk maybe_end;
+            }
+
+            while (lines.next()) |line| : (line_number += 1) {
+                if (matchesEndTag(file_name, line_number, line)) {
+                    include_end_tag = true;
+                    break :end_blk line.ptr - current_bytes.ptr - 1;
+                }
+            } else {
+                std.debug.panic(
+                    "{s}[{d}]: Expected copyv: end, but reached end of file\n",
+                    .{
+                        file_name,
+                        line_number,
+                    },
+                );
+            }
         };
 
-        const maybe_chunk = current_bytes[current_start..maybe_end];
-        if (std.mem.eql(u8, maybe_chunk, base_bytes)) {
-            break :end_blk maybe_end;
-        }
+        // Determine updated chunk bytes
 
-        while (lines.next()) |line| : (line_number += 1) {
-            if (matchesEndTag(file_name, line_number, line)) {
-                include_end_tag = true;
-                break :end_blk line.ptr - current_bytes.ptr - 1;
+        if (current_end) |end| {
+            const current_chunk = current_bytes[current_start..end];
+            if (!std.mem.eql(u8, current_chunk, base_bytes)) {
+                const current_file_name = "tmp/current_file";
+                try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
+                stderr = std.ArrayList(u8).empty;
+                stdout = std.ArrayList(u8).empty;
+
+                child_proc = std.process.Child.init(
+                    &[_][]const u8{ "git", "merge-file", "-p", current_file_name, base_file_name, new_file_name },
+                    allocator,
+                );
+                child_proc.stdout_behavior = .Pipe;
+                child_proc.stderr_behavior = .Pipe;
+                try child_proc.spawn();
+                try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
+                const merged_bytes = try stdout.toOwnedSlice(allocator);
+                _ = try child_proc.wait();
+                updated_chunk = merged_bytes;
             }
-        } else {
-            std.debug.panic(
-                "{s}[{d}]: Expected copyv: end, but reached end of file\n",
-                .{
-                    file_name,
-                    line_number,
-                },
-            );
-        }
-    };
-
-    // Determine updated chunk bytes
-
-    var updated_chunk: []const u8 = new_bytes;
-
-    if (current_end) |end| {
-        const current_chunk = current_bytes[current_start..end];
-        if (!std.mem.eql(u8, current_chunk, base_bytes)) {
-            const current_file_name = "tmp/current_file";
-            try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
-            stderr = std.ArrayList(u8).empty;
-            stdout = std.ArrayList(u8).empty;
-
-            child_proc = std.process.Child.init(
-                &[_][]const u8{ "git", "merge-file", "-p", current_file_name, base_file_name, new_file_name },
-                allocator,
-            );
-            child_proc.stdout_behavior = .Pipe;
-            child_proc.stderr_behavior = .Pipe;
-            try child_proc.spawn();
-            try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
-            const merged_bytes = try stdout.toOwnedSlice(allocator);
-            _ = try child_proc.wait();
-            updated_chunk = merged_bytes;
         }
     }
 
@@ -349,7 +425,15 @@ fn parseRange(range_str: []const u8) !GitRange {
     return .{ .start = start, .len = len };
 }
 
-fn fetchLatestCommitSha(allocator: std.mem.Allocator, api_url: []const u8) ![]const u8 {
+fn fetchLatestCommitSha(
+    allocator: std.mem.Allocator,
+    repo: []const u8,
+    ref: []const u8,
+) ![]const u8 {
+    const latest_ref = if (ref.len == 40) "HEAD" else ref;
+    const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, latest_ref });
+    defer allocator.free(api_url);
+
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
     _ = try client.fetch(.{
@@ -367,7 +451,7 @@ fn fetchLatestCommitSha(allocator: std.mem.Allocator, api_url: []const u8) ![]co
     return try allocator.dupe(u8, sha);
 }
 
-fn fetchFile(allocator: std.mem.Allocator, url: []const u8, path: []const u8) ![]const u8 {
+fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
     _ = try client.fetch(.{
@@ -375,12 +459,10 @@ fn fetchFile(allocator: std.mem.Allocator, url: []const u8, path: []const u8) ![
         .response_writer = &aw.writer,
     });
 
-    const bytes = try aw.toOwnedSlice();
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = bytes });
-    return bytes;
+    return try aw.toOwnedSlice();
 }
 
-fn writeLines(bytes: []const u8, path: []const u8, start_line: usize, end_line: usize) ![]const u8 {
+fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
     var start: usize = undefined;
     var end: usize = undefined;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -394,9 +476,7 @@ fn writeLines(bytes: []const u8, path: []const u8, start_line: usize, end_line: 
         }
     }
 
-    const slice = bytes[start..end];
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = slice });
-    return slice;
+    return bytes[start..end];
 }
 
 pub fn main() !void {
