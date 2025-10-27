@@ -7,23 +7,23 @@ const Action = enum {
     check_frozen,
 };
 
-fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir) !void {
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind == .directory) {
-            if (entry.name.len > 1 and entry.name[0] == '.') continue;
+fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, name: []const u8, kind: std.fs.File.Kind) !void {
+    if (kind == .directory) {
+        if (name.len > 1 and name[0] == '.') return;
 
-            var subdir = try dir.openDir(entry.name, .{ .iterate = true });
-            defer subdir.close();
-            try recursivelyUpdate(arena, subdir);
-        } else if (entry.kind == .file) {
-            if (!std.mem.endsWith(u8, entry.name, ".zig") and
-                !std.mem.endsWith(u8, entry.name, ".jl")) continue;
-
-            const allocator = arena.allocator();
-            try updateFile(allocator, dir, entry.name);
-            _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
+        var dir = try parent_dir.openDir(name, .{ .iterate = true });
+        defer dir.close();
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            try recursivelyUpdate(arena, dir, entry.name, entry.kind);
         }
+    } else if (kind == .file) {
+        if (!std.mem.endsWith(u8, name, ".zig") and
+            !std.mem.endsWith(u8, name, ".jl")) return;
+
+        const allocator = arena.allocator();
+        try updateFile(allocator, parent_dir, name);
+        _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
     }
 }
 
@@ -308,7 +308,6 @@ fn updateChunk(
     // Write base and new files
 
     const base_bytes = try getLines(base_file_bytes, base_start, base_end);
-    std.debug.print("new_file_bytes.len = {d}, new_start = {d}, new_end = {d}\n", .{ new_file_bytes.len, new_start, new_end });
     const new_bytes = try getLines(new_file_bytes, new_start, new_end);
     try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_bytes });
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_bytes });
@@ -483,7 +482,18 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
-    defer dir.close();
-    try recursivelyUpdate(&arena, dir);
+    const allocator = arena.allocator();
+    var arg_it = try std.process.argsWithAllocator(allocator);
+    defer arg_it.deinit();
+    _ = arg_it.next();
+
+    var name: []const u8 = ".";
+    var kind: std.fs.File.Kind = .directory;
+    if (arg_it.next()) |path| {
+        name = path;
+        const stat = try std.fs.cwd().statFile(path);
+        kind = stat.kind;
+    }
+
+    try recursivelyUpdate(&arena, std.fs.cwd(), name, kind);
 }
