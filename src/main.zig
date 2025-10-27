@@ -18,16 +18,18 @@ fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, na
             try recursivelyUpdate(arena, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
-        if (!std.mem.endsWith(u8, name, ".zig") and
-            !std.mem.endsWith(u8, name, ".jl")) return;
-
-        const allocator = arena.allocator();
-        try updateFile(allocator, parent_dir, name);
-        _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
+        try updateFile(arena, parent_dir, name);
     }
 }
 
-fn updateFile(allocator: std.mem.Allocator, dir: std.fs.Dir, file_name: []const u8) !void {
+fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []const u8) !void {
+    if (!std.mem.endsWith(u8, file_name, ".zig") and
+        !std.mem.endsWith(u8, file_name, ".jl")) return;
+
+    const possible_comments: []const []const u8 = if (std.mem.endsWith(u8, file_name, ".jl")) &[_][]const u8{"#"} else &[_][]const u8{"//"};
+
+    const allocator = arena.allocator();
+    defer _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
     var file = try dir.openFile(file_name, .{});
     errdefer file.close(); // also closed below
     var buf: [4096]u8 = undefined;
@@ -42,7 +44,7 @@ fn updateFile(allocator: std.mem.Allocator, dir: std.fs.Dir, file_name: []const 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
 
     while (lines.next()) |line| : (line_number += 1) {
-        if (matchesTag(line)) {
+        if (mightMatchTag(line)) {
             if (try updateChunk(
                 allocator,
                 file_name,
@@ -50,6 +52,7 @@ fn updateFile(allocator: std.mem.Allocator, dir: std.fs.Dir, file_name: []const 
                 &updated_bytes,
                 &lines,
                 line,
+                possible_comments,
             )) {
                 has_update = true;
             } else {
@@ -77,19 +80,37 @@ fn maybeAppendNewline(
     }
 }
 
-const COPYV_TAG = "// copyv: ";
+const COPYV_TAG = "copyv:";
 const COPYV_END = "end";
 
-fn matchesTag(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t");
-    return std.mem.startsWith(u8, trimmed, COPYV_TAG);
+fn mightMatchTag(line: []const u8) bool {
+    return std.mem.indexOf(u8, line, COPYV_TAG) != null;
 }
 
-fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8) bool {
-    if (!matchesTag(line)) return false;
+// If the tag matches, this returns the comment including whitespace.
+fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?[]const u8 {
+    const line_trimmed = std.mem.trimStart(u8, line, " \t");
+    for (possible_comments) |comment| {
+        if (std.mem.startsWith(u8, line_trimmed, comment)) {
+            const tag = line_trimmed[comment.len..];
+            const tag_trimmed = std.mem.trimStart(u8, tag, " \t");
+            if (std.mem.startsWith(u8, tag_trimmed, COPYV_TAG)) {
+                const line_whitespace = line.len - line_trimmed.len;
+                const tag_whitespace = tag.len - tag_trimmed.len;
+                const prefix_len = line_whitespace + comment.len + tag_whitespace + COPYV_TAG.len;
+                return line[0..prefix_len];
+            }
+        }
+    }
 
-    const trimmed = std.mem.trim(u8, line, " \t");
-    if (!std.mem.eql(u8, trimmed[COPYV_TAG.len..], COPYV_END)) {
+    return null;
+}
+
+fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, prefix)) return false;
+
+    const trimmed = std.mem.trim(u8, line[prefix.len..], " \t");
+    if (!std.mem.eql(u8, trimmed, COPYV_END)) {
         std.debug.panic(
             "{s}[{d}]: Expected copyv: end, but got another copyv line while still in a copyv section\n",
             .{
@@ -109,13 +130,16 @@ fn updateChunk(
     updated_bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
+    possible_comments: []const []const u8,
 ) !bool {
+    // Check if matches tag
+    const maybe_prefix = matchesTag(current_line, possible_comments);
+    if (maybe_prefix == null) return false;
+    const prefix = maybe_prefix.?;
+
     // Get the files from remote
 
-    const trimmed = std.mem.trim(u8, current_line, " \t");
-    var parts = std.mem.splitScalar(u8, trimmed, ':');
-    _ = parts.next(); // skip copyv
-    const line_payload = std.mem.trim(u8, parts.rest(), " \t");
+    const line_payload = std.mem.trim(u8, current_line[prefix.len..], " \t");
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
     const first_arg = line_args.first();
     var action: Action = undefined;
@@ -181,8 +205,8 @@ fn updateChunk(
         const base_bytes = try getLines(base_file_bytes, base_start, base_end);
         const updated_line = try std.fmt.allocPrint(
             allocator,
-            "// copyv: frozen {s}/blob/{s}/{s}#{s}",
-            .{ original_host, frozen_sha, path, line_numbers_str },
+            "{s} frozen {s}/blob/{s}/{s}#{s}",
+            .{ prefix, original_host, frozen_sha, path, line_numbers_str },
         );
         defer allocator.free(updated_line);
         try updated_bytes.appendSlice(allocator, updated_line);
@@ -325,7 +349,7 @@ fn updateChunk(
         const current_end = for (0..chunk_len - 1) |_| {
             if (lines.next()) |line| {
                 line_number += 1;
-                if (matchesEndTag(file_name, line_number, line)) {
+                if (matchesEndTag(file_name, line_number, line, prefix)) {
                     include_end_tag = true;
                     break line.ptr - current_bytes.ptr - 1;
                 }
@@ -334,7 +358,7 @@ fn updateChunk(
             const maybe_end = maybe_blk: {
                 if (lines.next()) |line| {
                     line_number += 1;
-                    if (matchesEndTag(file_name, line_number, line)) {
+                    if (matchesEndTag(file_name, line_number, line, prefix)) {
                         include_end_tag = true;
                         break :end_blk line.ptr - current_bytes.ptr - 1;
                     } else {
@@ -349,7 +373,7 @@ fn updateChunk(
             }
 
             while (lines.next()) |line| : (line_number += 1) {
-                if (matchesEndTag(file_name, line_number, line)) {
+                if (matchesEndTag(file_name, line_number, line, prefix)) {
                     include_end_tag = true;
                     break :end_blk line.ptr - current_bytes.ptr - 1;
                 }
@@ -393,8 +417,8 @@ fn updateChunk(
 
     const updated_url = try std.fmt.allocPrint(
         allocator,
-        "// copyv: {s}/blob/{s}/{s}#L{d}-L{d}",
-        .{ original_host, latest_sha, path, new_start, new_end },
+        "{s} {s}/blob/{s}/{s}#L{d}-L{d}",
+        .{ prefix, original_host, latest_sha, path, new_start, new_end },
     );
     defer allocator.free(updated_url);
     try updated_bytes.appendSlice(allocator, updated_url);
@@ -402,7 +426,13 @@ fn updateChunk(
     try updated_bytes.appendSlice(allocator, updated_chunk);
 
     if (include_end_tag) {
-        try updated_bytes.appendSlice(allocator, "\n// copyv: end");
+        const end_line = try std.fmt.allocPrint(
+            allocator,
+            "{s} end",
+            .{prefix},
+        );
+        defer allocator.free(end_line);
+        try updated_bytes.appendSlice(allocator, end_line);
     }
 
     try maybeAppendNewline(updated_bytes, allocator, lines);
