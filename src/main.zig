@@ -205,7 +205,6 @@ fn updateChunk(
     const base_end = try std.fmt.parseInt(usize, base_end_str, 10);
 
     const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
-    defer allocator.free(base_url);
     const base_file_bytes = try fetchFile(allocator, base_url);
 
     if (action == .get_frozen) {
@@ -219,7 +218,6 @@ fn updateChunk(
             "{s} frozen {s}/blob/{s}/{s}#{s}",
             .{ prefix, original_host, frozen_sha, path, line_numbers_str },
         );
-        defer allocator.free(updated_line);
         try updated_bytes.appendSlice(allocator, updated_line);
         try updated_bytes.append(allocator, '\n');
         try updated_bytes.appendSlice(allocator, base_bytes);
@@ -230,9 +228,7 @@ fn updateChunk(
     }
 
     const latest_sha = try fetchLatestCommitSha(allocator, repo, ref);
-    defer allocator.free(latest_sha);
     const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}/{s}", .{ repo, latest_sha, path });
-    defer allocator.free(new_url);
     const new_file_bytes = try fetchFile(allocator, new_url);
 
     // Diff the files
@@ -242,19 +238,10 @@ fn updateChunk(
     try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_file_bytes });
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_file_bytes });
 
-    var stderr = std.ArrayList(u8).empty;
-    var stdout = std.ArrayList(u8).empty;
-
-    var child_proc = std.process.Child.init(
-        &[_][]const u8{ "git", "diff", "--no-index", base_file_name, new_file_name },
+    const stdout_slice = try runCommand(
         allocator,
+        &[_][]const u8{ "git", "diff", "--no-index", base_file_name, new_file_name },
     );
-    child_proc.stdout_behavior = .Pipe;
-    child_proc.stderr_behavior = .Pipe;
-    try child_proc.spawn();
-    try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
-    const stdout_slice = try stdout.toOwnedSlice(allocator);
-    _ = try child_proc.wait();
 
     // Check if diff is in the chunk
 
@@ -398,43 +385,23 @@ fn updateChunk(
             const current_file_name = "tmp/current_file";
             try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
 
-            stderr = std.ArrayList(u8).empty;
-            stdout = std.ArrayList(u8).empty;
-            child_proc = std.process.Child.init(
-                &[_][]const u8{ "git", "config", "--get", "merge.conflictstyle" },
+            const conflict_style_output = try runCommand(
                 allocator,
+                &[_][]const u8{ "git", "config", "--get", "merge.conflictstyle" },
             );
-            child_proc.stdout_behavior = .Pipe;
-            child_proc.stderr_behavior = .Pipe;
-            try child_proc.spawn();
-            try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
-            _ = try child_proc.wait();
-            const conflict_style = std.mem.trim(u8, try stdout.toOwnedSlice(allocator), &std.ascii.whitespace);
-            defer allocator.free(conflict_style);
-
-            stderr = std.ArrayList(u8).empty;
-            stdout = std.ArrayList(u8).empty;
-
+            const conflict_style = std.mem.trim(u8, conflict_style_output, &std.ascii.whitespace);
             var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 7);
             merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "git", "merge-file", "-p" });
+
             if (std.mem.eql(u8, conflict_style, "diff3")) {
                 merge_args.appendAssumeCapacity("--diff3");
             } else if (std.mem.eql(u8, conflict_style, "zdiff3")) {
                 merge_args.appendAssumeCapacity("--zdiff3");
             }
+
             merge_args.appendSliceAssumeCapacity(&[_][]const u8{ current_file_name, base_file_name, new_file_name });
 
-            child_proc = std.process.Child.init(
-                merge_args.items,
-                allocator,
-            );
-            child_proc.stdout_behavior = .Pipe;
-            child_proc.stderr_behavior = .Pipe;
-            try child_proc.spawn();
-            try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
-            const merged_bytes = try stdout.toOwnedSlice(allocator);
-            _ = try child_proc.wait();
-            updated_chunk = merged_bytes;
+            updated_chunk = try runCommand(allocator, merge_args.items);
         }
     }
 
@@ -445,7 +412,6 @@ fn updateChunk(
         "{s} {s}/blob/{s}/{s}#L{d}-L{d}",
         .{ prefix, original_host, latest_sha, path, new_start, new_end },
     );
-    defer allocator.free(updated_url);
     try updated_bytes.appendSlice(allocator, updated_url);
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
@@ -457,7 +423,6 @@ fn updateChunk(
             "{s} end",
             .{prefix},
         );
-        defer allocator.free(end_line);
         try updated_bytes.appendSlice(allocator, end_line);
     }
 
@@ -480,6 +445,18 @@ fn parseRange(range_str: []const u8) !GitRange {
     return .{ .start = start, .len = len };
 }
 
+fn runCommand(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
+    var stderr = std.ArrayList(u8).empty;
+    var stdout = std.ArrayList(u8).empty;
+    var child_proc = std.process.Child.init(args, allocator);
+    child_proc.stdout_behavior = .Pipe;
+    child_proc.stderr_behavior = .Pipe;
+    try child_proc.spawn();
+    try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
+    _ = try child_proc.wait();
+    return try stdout.toOwnedSlice(allocator);
+}
+
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
     repo: []const u8,
@@ -487,7 +464,6 @@ fn fetchLatestCommitSha(
 ) ![]const u8 {
     const latest_ref = if (ref.len == 40) "HEAD" else ref;
     const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, latest_ref });
-    defer allocator.free(api_url);
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
