@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const max_output_bytes = 100_000_000;
+
 const Action = enum {
     pull,
     get,
@@ -87,18 +89,24 @@ fn mightMatchTag(line: []const u8) bool {
     return std.mem.indexOf(u8, line, COPYV_TAG) != null;
 }
 
+const Match = struct {
+    prefix: []const u8,
+    indent: usize,
+};
+
 // If the tag matches, this returns the comment including whitespace.
-fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?[]const u8 {
-    const line_trimmed = std.mem.trimStart(u8, line, " \t");
+fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?Match {
+    const line_trimmed = std.mem.trimStart(u8, line, &std.ascii.whitespace);
     for (possible_comments) |comment| {
         if (std.mem.startsWith(u8, line_trimmed, comment)) {
             const tag = line_trimmed[comment.len..];
-            const tag_trimmed = std.mem.trimStart(u8, tag, " \t");
+            const tag_trimmed = std.mem.trimStart(u8, tag, &std.ascii.whitespace);
             if (std.mem.startsWith(u8, tag_trimmed, COPYV_TAG)) {
-                const line_whitespace = line.len - line_trimmed.len;
+                const indent = line.len - line_trimmed.len;
                 const tag_whitespace = tag.len - tag_trimmed.len;
-                const prefix_len = line_whitespace + comment.len + tag_whitespace + COPYV_TAG.len;
-                return line[0..prefix_len];
+                const prefix_len = indent + comment.len + tag_whitespace + COPYV_TAG.len;
+                const prefix = line[0..prefix_len];
+                return .{ .prefix = prefix, .indent = indent };
             }
         }
     }
@@ -109,7 +117,7 @@ fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?[]const 
 fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8, prefix: []const u8) bool {
     if (!std.mem.startsWith(u8, line, prefix)) return false;
 
-    const trimmed = std.mem.trim(u8, line[prefix.len..], " \t");
+    const trimmed = std.mem.trim(u8, line[prefix.len..], &std.ascii.whitespace);
     if (!std.mem.eql(u8, trimmed, COPYV_END)) {
         std.debug.panic(
             "{s}[{d}]: Expected copyv: end, but got another copyv line while still in a copyv section\n",
@@ -133,13 +141,16 @@ fn updateChunk(
     possible_comments: []const []const u8,
 ) !bool {
     // Check if matches tag
-    const maybe_prefix = matchesTag(current_line, possible_comments);
-    if (maybe_prefix == null) return false;
-    const prefix = maybe_prefix.?;
+    const maybe_match = matchesTag(current_line, possible_comments);
+    if (maybe_match == null) return false;
+    const match = maybe_match.?;
+    const prefix = match.prefix;
+    const indent = match.indent;
+    _ = indent;
 
     // Get the files from remote
 
-    const line_payload = std.mem.trim(u8, current_line[prefix.len..], " \t");
+    const line_payload = std.mem.trim(u8, current_line[prefix.len..], &std.ascii.whitespace);
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
     const first_arg = line_args.first();
     var action: Action = undefined;
@@ -241,7 +252,7 @@ fn updateChunk(
     child_proc.stdout_behavior = .Pipe;
     child_proc.stderr_behavior = .Pipe;
     try child_proc.spawn();
-    try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
+    try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
     const stdout_slice = try stdout.toOwnedSlice(allocator);
     _ = try child_proc.wait();
 
@@ -353,7 +364,7 @@ fn updateChunk(
                     include_end_tag = true;
                     break line.ptr - current_bytes.ptr - 1;
                 }
-            } else break null;
+            } else break current_bytes.len;
         } else end_blk: {
             const maybe_end = maybe_blk: {
                 if (lines.next()) |line| {
@@ -364,7 +375,7 @@ fn updateChunk(
                     } else {
                         break :maybe_blk line.ptr - current_bytes.ptr + line.len;
                     }
-                } else break :end_blk null;
+                } else break :end_blk current_bytes.len;
             };
 
             const maybe_chunk = current_bytes[current_start..maybe_end];
@@ -377,39 +388,53 @@ fn updateChunk(
                     include_end_tag = true;
                     break :end_blk line.ptr - current_bytes.ptr - 1;
                 }
-            } else {
-                std.debug.panic(
-                    "{s}[{d}]: Expected copyv: end, but reached end of file\n",
-                    .{
-                        file_name,
-                        line_number,
-                    },
-                );
-            }
+            } else break :end_blk current_bytes.len;
         };
 
         // Determine updated chunk bytes
 
-        if (current_end) |end| {
-            const current_chunk = current_bytes[current_start..end];
-            if (!std.mem.eql(u8, current_chunk, base_bytes)) {
-                const current_file_name = "tmp/current_file";
-                try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
-                stderr = std.ArrayList(u8).empty;
-                stdout = std.ArrayList(u8).empty;
+        const current_chunk = current_bytes[current_start..current_end];
+        if (!std.mem.eql(u8, current_chunk, base_bytes)) {
+            const current_file_name = "tmp/current_file";
+            try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
 
-                child_proc = std.process.Child.init(
-                    &[_][]const u8{ "git", "merge-file", "-p", current_file_name, base_file_name, new_file_name },
-                    allocator,
-                );
-                child_proc.stdout_behavior = .Pipe;
-                child_proc.stderr_behavior = .Pipe;
-                try child_proc.spawn();
-                try child_proc.collectOutput(allocator, &stdout, &stderr, 1_000_000);
-                const merged_bytes = try stdout.toOwnedSlice(allocator);
-                _ = try child_proc.wait();
-                updated_chunk = merged_bytes;
+            stderr = std.ArrayList(u8).empty;
+            stdout = std.ArrayList(u8).empty;
+            child_proc = std.process.Child.init(
+                &[_][]const u8{ "git", "config", "--get", "merge.conflictstyle" },
+                allocator,
+            );
+            child_proc.stdout_behavior = .Pipe;
+            child_proc.stderr_behavior = .Pipe;
+            try child_proc.spawn();
+            try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
+            _ = try child_proc.wait();
+            const conflict_style = std.mem.trim(u8, try stdout.toOwnedSlice(allocator), &std.ascii.whitespace);
+            defer allocator.free(conflict_style);
+
+            stderr = std.ArrayList(u8).empty;
+            stdout = std.ArrayList(u8).empty;
+
+            var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 7);
+            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "git", "merge-file", "-p" });
+            if (std.mem.eql(u8, conflict_style, "diff3")) {
+                merge_args.appendAssumeCapacity("--diff3");
+            } else if (std.mem.eql(u8, conflict_style, "zdiff3")) {
+                merge_args.appendAssumeCapacity("--zdiff3");
             }
+            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ current_file_name, base_file_name, new_file_name });
+
+            child_proc = std.process.Child.init(
+                merge_args.items,
+                allocator,
+            );
+            child_proc.stdout_behavior = .Pipe;
+            child_proc.stderr_behavior = .Pipe;
+            try child_proc.spawn();
+            try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
+            const merged_bytes = try stdout.toOwnedSlice(allocator);
+            _ = try child_proc.wait();
+            updated_chunk = merged_bytes;
         }
     }
 
@@ -426,6 +451,7 @@ fn updateChunk(
     try updated_bytes.appendSlice(allocator, updated_chunk);
 
     if (include_end_tag) {
+        try updated_bytes.append(allocator, '\n');
         const end_line = try std.fmt.allocPrint(
             allocator,
             "{s} end",
