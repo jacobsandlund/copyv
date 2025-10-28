@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const max_output_bytes = 100_000_000;
-
 const Action = enum {
     pull,
     get,
@@ -42,6 +40,7 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var line_number: usize = 1;
     var has_update = false;
+    var maybe_in_frozen_chunk = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
 
@@ -55,6 +54,7 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
                 &lines,
                 line,
                 possible_comments,
+                &maybe_in_frozen_chunk,
             )) {
                 has_update = true;
             } else {
@@ -82,11 +82,10 @@ fn maybeAppendNewline(
     }
 }
 
-const COPYV_TAG = "copyv:";
-const COPYV_END = "end";
+const copyv_tag = "copyv:";
 
 fn mightMatchTag(line: []const u8) bool {
-    return std.mem.indexOf(u8, line, COPYV_TAG) != null;
+    return std.mem.indexOf(u8, line, copyv_tag) != null;
 }
 
 const Match = struct {
@@ -101,10 +100,10 @@ fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?Match {
         if (std.mem.startsWith(u8, line_trimmed, comment)) {
             const tag = line_trimmed[comment.len..];
             const tag_trimmed = std.mem.trimStart(u8, tag, &std.ascii.whitespace);
-            if (std.mem.startsWith(u8, tag_trimmed, COPYV_TAG)) {
+            if (std.mem.startsWith(u8, tag_trimmed, copyv_tag)) {
                 const indent = line.len - line_trimmed.len;
                 const tag_whitespace = tag.len - tag_trimmed.len;
-                const prefix_len = indent + comment.len + tag_whitespace + COPYV_TAG.len;
+                const prefix_len = indent + comment.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
                 return .{ .prefix = prefix, .indent = indent };
             }
@@ -117,8 +116,8 @@ fn matchesTag(line: []const u8, possible_comments: []const []const u8) ?Match {
 fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8, prefix: []const u8) bool {
     if (!std.mem.startsWith(u8, line, prefix)) return false;
 
-    const trimmed = std.mem.trim(u8, line[prefix.len..], &std.ascii.whitespace);
-    if (!std.mem.eql(u8, trimmed, COPYV_END)) {
+    const trimmed = std.mem.trimStart(u8, line[prefix.len..], &std.ascii.whitespace);
+    if (!std.mem.startsWith(u8, trimmed, "e")) { // "end"
         std.debug.panic(
             "{s}[{d}]: Expected copyv: end, but got another copyv line while still in a copyv section\n",
             .{
@@ -139,6 +138,7 @@ fn updateChunk(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     possible_comments: []const []const u8,
+    maybe_in_frozen_chunk: *bool,
 ) !bool {
     // Check if matches tag
     const maybe_match = matchesTag(current_line, possible_comments);
@@ -171,6 +171,12 @@ fn updateChunk(
     } else if (std.mem.startsWith(u8, first_arg, "fr")) { // freeze, frozen, fr
         action = .check_frozen;
         url_with_line_numbers = line_args.rest();
+    } else if (std.mem.startsWith(u8, first_arg, "e")) { // end
+        if (maybe_in_frozen_chunk.*) {
+            return false;
+        } else {
+            std.debug.panic("{s}[{d}]: Unexpected copyv: end, outside of a copyv chunk\n", .{ file_name, start_line_number });
+        }
     } else {
         action = .pull;
         url_with_line_numbers = first_arg;
@@ -187,13 +193,29 @@ fn updateChunk(
     const ref = path_parts.next().?;
 
     if (action == .check_frozen) {
+        maybe_in_frozen_chunk.* = true;
+
         if (ref.len != 40) {
             std.debug.panic("{s}[{d}]: Frozen copyv line must point to a commit SHA\n", .{
                 file_name,
                 start_line_number,
             });
         }
-        return false;
+
+        if (std.mem.eql(u8, first_arg, "frozen")) {
+            return false;
+        } else {
+            const updated_line = try std.fmt.allocPrint(
+                allocator,
+                "{s} frozen {s}",
+                .{ prefix, url_with_line_numbers },
+            );
+            try updated_bytes.appendSlice(allocator, updated_line);
+            try maybeAppendNewline(updated_bytes, allocator, lines);
+            return true;
+        }
+    } else {
+        maybe_in_frozen_chunk.* = false;
     }
 
     const path = path_parts.rest();
@@ -444,6 +466,8 @@ fn parseRange(range_str: []const u8) !GitRange {
     const len = try std.fmt.parseInt(usize, len_str, 10);
     return .{ .start = start, .len = len };
 }
+
+const max_output_bytes = 100_000_000;
 
 fn runCommand(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
     var stderr = std.ArrayList(u8).empty;
