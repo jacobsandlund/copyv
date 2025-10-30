@@ -7,6 +7,16 @@ const Action = enum {
     check_frozen,
 };
 
+const FileTypeInfo = struct {
+    comments: []const []const u8,
+    common_indent_width: u8,
+};
+
+const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
+    .{ ".zig", .{ .comments = &[_][]const u8{"//"}, .common_indent_width = 4 } },
+    .{ ".jl", .{ .comments = &[_][]const u8{"#"}, .common_indent_width = 4 } },
+});
+
 fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, name: []const u8, kind: std.fs.File.Kind) !void {
     if (kind == .directory) {
         if (name.len > 1 and name[0] == '.') return;
@@ -23,10 +33,8 @@ fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, na
 }
 
 fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []const u8) !void {
-    if (!std.mem.endsWith(u8, file_name, ".zig") and
-        !std.mem.endsWith(u8, file_name, ".jl")) return;
-
-    const possible_comments: []const []const u8 = if (std.mem.endsWith(u8, file_name, ".jl")) &[_][]const u8{"#"} else &[_][]const u8{"//"};
+    const ext = std.fs.path.extension(file_name);
+    const file_type_info = file_type_info_map.get(ext) orelse return;
 
     const allocator = arena.allocator();
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
@@ -55,7 +63,7 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
                 &lines,
                 line,
                 &indent,
-                possible_comments,
+                file_type_info,
                 &maybe_in_frozen_chunk,
             )) {
                 has_update = true;
@@ -108,12 +116,12 @@ const line_whitespace = " \t";
 // If the tag matches, this returns the comment including whitespace.
 fn matchesTag(
     line: []const u8,
-    possible_comments: []const []const u8,
+    file_type_info: FileTypeInfo,
     lazy_file_indent: *?Indent,
     file_bytes: []const u8,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
-    for (possible_comments) |comment| {
+    for (file_type_info.comments) |comment| {
         if (std.mem.startsWith(u8, line_trimmed, comment)) {
             const tag = line_trimmed[comment.len..];
             const tag_trimmed = std.mem.trimStart(u8, tag, line_whitespace);
@@ -123,7 +131,7 @@ fn matchesTag(
                 const prefix_len = indent_start + comment.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
                 const file_indent = lazy_file_indent.* orelse blk: {
-                    const indent = getIndent(file_bytes);
+                    const indent = getIndent(file_bytes, file_type_info.common_indent_width);
                     lazy_file_indent.* = indent;
                     break :blk indent;
                 };
@@ -168,13 +176,13 @@ fn updateChunk(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     lazy_file_indent: *?Indent,
-    possible_comments: []const []const u8,
+    file_type_info: FileTypeInfo,
     maybe_in_frozen_chunk: *bool,
 ) !bool {
     // Check if matches tag
     const maybe_match = matchesTag(
         current_line,
-        possible_comments,
+        file_type_info,
         lazy_file_indent,
         lines.buffer,
     );
@@ -277,7 +285,7 @@ fn updateChunk(
         );
         try updated_bytes.appendSlice(allocator, updated_line);
         try updated_bytes.append(allocator, '\n');
-        try matchIndent(allocator, updated_bytes, base_bytes, indent);
+        try matchIndent(allocator, updated_bytes, base_bytes, indent, file_type_info.common_indent_width);
         try maybeAppendNewline(updated_bytes, allocator, lines);
 
         return true;
@@ -389,8 +397,8 @@ fn updateChunk(
     const new_bytes = try getLines(new_file_bytes, new_start, new_end);
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
-    try matchIndent(allocator, &base_indented, base_bytes, indent);
-    try matchIndent(allocator, &new_indented, new_bytes, indent);
+    try matchIndent(allocator, &base_indented, base_bytes, indent, file_type_info.common_indent_width);
+    try matchIndent(allocator, &new_indented, new_bytes, indent, file_type_info.common_indent_width);
     try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_indented.items });
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_indented.items });
 
@@ -575,7 +583,7 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
 const shift_count_threshold = 8;
 const indent_width_max = 16;
 
-fn getIndent(bytes: []const u8) Indent {
+fn getIndent(bytes: []const u8, file_type_common_indent: u8) Indent {
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     const start = while (lines.next()) |line| {
         const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
@@ -610,6 +618,7 @@ fn getIndent(bytes: []const u8) Indent {
     // bias shift counts towards expected indents as a prior
     shift_counts[2] = 2;
     shift_counts[4] = 2;
+    shift_counts[file_type_common_indent] += 1;
 
     var last_indent: usize = 0;
     lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -668,8 +677,9 @@ fn matchIndent(
     updated_bytes: *std.ArrayList(u8),
     bytes: []const u8,
     desired: Indent,
+    file_type_common_indent: u8,
 ) !void {
-    const current = getIndent(bytes);
+    const current = getIndent(bytes, file_type_common_indent);
 
     // Fast path for equal indents
     if (std.meta.eql(current, desired)) {
