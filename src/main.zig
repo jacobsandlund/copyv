@@ -70,11 +70,11 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
                 has_update = true;
             } else {
                 try updated_bytes.appendSlice(allocator, line);
-                try maybeAppendNewline(&updated_bytes, allocator, &lines);
+                try maybeAppendNewline(allocator, &updated_bytes, &lines);
             }
         } else {
             try updated_bytes.appendSlice(allocator, line);
-            try maybeAppendNewline(&updated_bytes, allocator, &lines);
+            try maybeAppendNewline(allocator, &updated_bytes, &lines);
         }
     }
 
@@ -84,8 +84,8 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
 }
 
 fn maybeAppendNewline(
-    bytes: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
+    bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
 ) !void {
     if (lines.peek() != null) {
@@ -167,6 +167,19 @@ fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8, pr
     }
 
     return true;
+}
+
+fn appendEndTag(
+    allocator: std.mem.Allocator,
+    bytes: *std.ArrayList(u8),
+    prefix: []const u8,
+) !void {
+    const end_line = try std.fmt.allocPrint(
+        allocator,
+        "{s} end",
+        .{prefix},
+    );
+    try bytes.appendSlice(allocator, end_line);
 }
 
 fn updateChunk(
@@ -259,7 +272,7 @@ fn updateChunk(
                 .{ prefix, url_with_line_numbers },
             );
             try updated_bytes.appendSlice(allocator, updated_line);
-            try maybeAppendNewline(updated_bytes, allocator, lines);
+            try maybeAppendNewline(allocator, updated_bytes, lines);
             return true;
         }
     } else {
@@ -291,7 +304,9 @@ fn updateChunk(
         try updated_bytes.appendSlice(allocator, updated_line);
         try updated_bytes.append(allocator, '\n');
         try matchIndent(allocator, updated_bytes, base_bytes, indent, file_type_info.common_indent_width);
-        try maybeAppendNewline(updated_bytes, allocator, lines);
+        try updated_bytes.append(allocator, '\n');
+        try appendEndTag(allocator, updated_bytes, prefix);
+        try maybeAppendNewline(allocator, updated_bytes, lines);
 
         return true;
     }
@@ -408,7 +423,6 @@ fn updateChunk(
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_indented.items });
 
     var updated_chunk: []const u8 = new_indented.items;
-    var include_end_tag = false;
 
     // Get the current chunk
     if (action == .track) {
@@ -421,7 +435,6 @@ fn updateChunk(
             if (lines.next()) |line| {
                 line_number += 1;
                 if (matchesEndTag(file_name, line_number, line, prefix)) {
-                    include_end_tag = true;
                     break line.ptr - current_bytes.ptr - 1;
                 }
             } else break current_bytes.len;
@@ -430,7 +443,6 @@ fn updateChunk(
                 if (lines.next()) |line| {
                     line_number += 1;
                     if (matchesEndTag(file_name, line_number, line, prefix)) {
-                        include_end_tag = true;
                         break :end_blk line.ptr - current_bytes.ptr - 1;
                     } else {
                         break :maybe_blk line.ptr - current_bytes.ptr + line.len;
@@ -445,7 +457,6 @@ fn updateChunk(
 
             while (lines.next()) |line| : (line_number += 1) {
                 if (matchesEndTag(file_name, line_number, line, prefix)) {
-                    include_end_tag = true;
                     break :end_blk line.ptr - current_bytes.ptr - 1;
                 }
             } else break :end_blk current_bytes.len;
@@ -488,18 +499,9 @@ fn updateChunk(
     try updated_bytes.appendSlice(allocator, updated_url);
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
-
-    if (include_end_tag) {
-        try updated_bytes.append(allocator, '\n');
-        const end_line = try std.fmt.allocPrint(
-            allocator,
-            "{s} end",
-            .{prefix},
-        );
-        try updated_bytes.appendSlice(allocator, end_line);
-    }
-
-    try maybeAppendNewline(updated_bytes, allocator, lines);
+    try updated_bytes.append(allocator, '\n');
+    try appendEndTag(allocator, updated_bytes, prefix);
+    try maybeAppendNewline(allocator, updated_bytes, lines);
 
     return true;
 }
