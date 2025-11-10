@@ -724,9 +724,9 @@ fn matchIndent(
     // Simpler path for consistent indents (same char and for spaces same width,
     // or for tabs, starts that are aligned with the widths)
     if (current.char == desired.char and
-        (desired.char == ' ' and current.width == desired.width or
-            (current.start % current.width == 0 and
-                desired.start % desired.width == 0)))
+        ((desired.char == ' ' and current.width == desired.width) or (desired.char == '\t' and
+            current.start % current.width == 0 and
+            desired.start % desired.width == 0)))
     {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         var desired_start: usize = undefined;
@@ -743,9 +743,10 @@ fn matchIndent(
             const add_bytes = try getWhitespace(allocator, desired.char, add);
             while (lines.next()) |line| {
                 const line_start = std.mem.indexOfNone(u8, line, line_whitespace) orelse line.len;
-                if (line_start > 0 or (line.len > 0 and current_start == 0)) {
+                if (line_start > 0 or (line.len > 0 and current.start == 0)) {
                     try updated_bytes.appendSlice(allocator, add_bytes);
                 }
+                // This will leave whitespace in whitespace-only lines
                 try updated_bytes.appendSlice(allocator, line);
                 if (lines.peek() != null) {
                     try updated_bytes.append(allocator, '\n');
@@ -758,6 +759,7 @@ fn matchIndent(
                     remove,
                     std.mem.indexOfNone(u8, line, line_whitespace) orelse line.len,
                 );
+                // This will leave whitespace in whitespace-only lines
                 try updated_bytes.appendSlice(allocator, line[start..]);
                 if (lines.peek() != null) {
                     try updated_bytes.append(allocator, '\n');
@@ -770,72 +772,63 @@ fn matchIndent(
 
     // Complex path for mixed indents
     var lines = std.mem.splitScalar(u8, bytes, '\n');
-    if (current.char == '\t') {
-        var desired_tabs: usize = undefined;
-        var desired_spaces: usize = undefined;
-        if (desired.char == ' ') {
-            desired_spaces = desired.start;
-        } else {
-            desired_tabs = desired.start / desired.width;
-            desired_spaces = desired.start - desired.start % desired.width;
-        }
+    var desired_tabs: usize = undefined;
+    var desired_spaces: usize = undefined;
+    var desired_whitespace: []const u8 = undefined;
 
-        const desired_whitespace = if (desired.char == ' ')
-            try getWhitespace(
-                allocator,
-                ' ',
-                desired_spaces,
-            )
-        else
-            try getMixedWhitespace(allocator, desired_tabs, desired_spaces);
-
-        while (lines.next()) |line| {
-            const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
-            if (first_non_whitespace) |index| {
-                const tab_count = std.mem.count(u8, line[0..index], "\t");
-                const space_count = std.mem.count(u8, line[0..index], " ");
-
-                // Note: this does not consider spaces that have no impact on
-                // the indentation because they are followed by tabs, but for
-                // well-formed whitespace, that shouldn't be the case.
-                const line_start = tab_count * current.width + space_count;
-                if (line_start > current.start) {
-                    const over_start = line_start - current.start;
-                    const over_indents = over_start / current.width;
-                    const over_spaces = over_start - over_indents * current.width;
-                    const whitespace = if (desired.char == ' ')
-                        try getWhitespace(
-                            allocator,
-                            ' ',
-                            desired_spaces + over_indents * desired.width + over_spaces,
-                        )
-                    else
-                        try getMixedWhitespace(allocator, desired_tabs + over_indents, desired_spaces + over_spaces);
-                    try updated_bytes.appendSlice(allocator, whitespace);
-                    try updated_bytes.appendSlice(allocator, line[index..]);
-                } else {
-                    try updated_bytes.appendSlice(allocator, desired_whitespace);
-                    try updated_bytes.appendSlice(allocator, line[index..]);
-                }
-            }
-
-            if (lines.peek() != null) {
-                try updated_bytes.append(allocator, '\n');
-            }
-        }
+    if (desired.char == ' ') {
+        desired_spaces = desired.start;
+        desired_whitespace = try getWhitespace(
+            allocator,
+            ' ',
+            desired_spaces,
+        );
     } else {
-        // TODO:
-        //while (lines.next()) |line| {
-        //    const whitespace_len = blk: {
-        //        if (first_non_whitespace < current.start) {
-        //            break :blk 0;
-        //        }
-        //        const whitespace_past_start = first_non_whitespace - current.start;
-        //        const indent_truncated = whitespace_past_start / current.width;
-        //        const indent_remainder = whitespace_past_start - current_indent_truncated * current.width;
-        //        const truncated_whitespace_len = indent_truncated * current.width;
-        //    };
-        //}
+        desired_tabs = desired.start / desired.width;
+        desired_spaces = desired.start - desired.start % desired.width;
+        desired_whitespace = try getMixedWhitespace(
+            allocator,
+            desired_tabs,
+            desired_spaces,
+        );
+    }
+
+    while (lines.next()) |line| {
+        const line_start = std.mem.indexOfNone(u8, line, line_whitespace) orelse line.len;
+        const tab_count = std.mem.count(u8, line[0..line_start], "\t");
+        const space_count = std.mem.count(u8, line[0..line_start], " ");
+
+        // Note: this does not consider spaces that have no impact on
+        // the indentation because they are followed by tabs, but for
+        // well-formed whitespace, that shouldn't be the case.
+        const line_width = tab_count * current.width + space_count;
+        var whitespace: []const u8 = undefined;
+
+        if (line_width > current.start) {
+            const over_start = line_width - current.start;
+            const over_indents = over_start / current.width;
+            const over_spaces = over_start - over_indents * current.width;
+            whitespace = if (desired.char == ' ')
+                try getWhitespace(
+                    allocator,
+                    ' ',
+                    desired_spaces + over_indents * desired.width + over_spaces,
+                )
+            else
+                try getMixedWhitespace(allocator, desired_tabs + over_indents, desired_spaces + over_spaces);
+        } else {
+            whitespace = desired_whitespace;
+        }
+
+        if (line_start > 0 or (line.len > 0 and current.start == 0)) {
+            // This will leave whitespace in whitespace-only lines
+            try updated_bytes.appendSlice(allocator, whitespace);
+        }
+        try updated_bytes.appendSlice(allocator, line[line_start..]);
+
+        if (lines.peek() != null) {
+            try updated_bytes.append(allocator, '\n');
+        }
     }
 }
 
