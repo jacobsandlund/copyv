@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Action = enum {
-    pull,
+    track,
     get,
     get_freeze,
     check_freeze,
@@ -200,17 +200,8 @@ fn updateChunk(
     var action: Action = undefined;
     var url_with_line_numbers: []const u8 = undefined;
 
-    if (std.mem.startsWith(u8, first_arg, "g")) { // get, go, g
-        if (line_args.peek()) |peek| {
-            if (std.mem.startsWith(u8, peek, "fr")) { // freeze, frozen, fr
-                action = .get_freeze;
-                _ = line_args.next(); // skip fr[ozen]
-            } else {
-                action = .get;
-            }
-        } else {
-            std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{ file_name, start_line_number });
-        }
+    if (std.mem.startsWith(u8, first_arg, "t")) { // track, t
+        action = .track;
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.startsWith(u8, first_arg, "fr")) { // freeze, frozen, fr
         action = .check_freeze;
@@ -219,12 +210,25 @@ fn updateChunk(
         if (maybe_in_frozen_chunk.*) {
             return false;
         } else {
-            std.debug.panic("{s}[{d}]: Unexpected copyv: end, outside of a copyv chunk\n", .{ file_name, start_line_number });
+            std.debug.panic("{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n", .{ file_name, start_line_number });
         }
-    } else {
-        action = .pull;
-        url_with_line_numbers = first_arg;
-        std.debug.assert(std.mem.eql(u8, line_args.rest(), ""));
+    } else { // get
+        if (std.mem.startsWith(u8, first_arg, "g")) { // get, go, g
+            if (line_args.peek()) |peek| {
+                if (std.mem.startsWith(u8, peek, "fr")) { // freeze, frozen, fr
+                    action = .get_freeze;
+                    _ = line_args.next(); // skip fr[ozen]
+                } else {
+                    action = .get;
+                }
+            } else {
+                std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{ file_name, start_line_number });
+            }
+            url_with_line_numbers = line_args.rest();
+        } else {
+            action = .get;
+            url_with_line_numbers = first_arg;
+        }
     }
 
     var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
@@ -407,7 +411,7 @@ fn updateChunk(
     var include_end_tag = false;
 
     // Get the current chunk
-    if (action == .pull) {
+    if (action == .track) {
         const chunk_len = base_end - base_start + 1;
         const current_bytes = lines.buffer;
         const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
@@ -478,7 +482,7 @@ fn updateChunk(
 
     const updated_url = try std.fmt.allocPrint(
         allocator,
-        "{s} {s}/blob/{s}/{s}#L{d}-L{d}",
+        "{s} track {s}/blob/{s}/{s}#L{d}-L{d}",
         .{ prefix, original_host, latest_sha, path, new_start, new_end },
     );
     try updated_bytes.appendSlice(allocator, updated_url);
