@@ -771,14 +771,24 @@ fn matchIndent(
     // Complex path for mixed indents
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     if (current.char == '\t') {
-        var desired_tabs = undefined;
-        var desired_spaces = undefined;
+        var desired_tabs: usize = undefined;
+        var desired_spaces: usize = undefined;
         if (desired.char == ' ') {
             desired_spaces = desired.start;
         } else {
             desired_tabs = desired.start / desired.width;
             desired_spaces = desired.start - desired.start % desired.width;
         }
+
+        const desired_whitespace = if (desired.char == ' ')
+            try getWhitespace(
+                allocator,
+                ' ',
+                desired_spaces,
+            )
+        else
+            try getMixedWhitespace(allocator, desired_tabs, desired_spaces);
+
         while (lines.next()) |line| {
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
             if (first_non_whitespace) |index| {
@@ -804,7 +814,8 @@ fn matchIndent(
                     try updated_bytes.appendSlice(allocator, whitespace);
                     try updated_bytes.appendSlice(allocator, line[index..]);
                 } else {
-                    // TODO
+                    try updated_bytes.appendSlice(allocator, desired_whitespace);
+                    try updated_bytes.appendSlice(allocator, line[index..]);
                 }
             }
 
@@ -813,17 +824,18 @@ fn matchIndent(
             }
         }
     } else {
-        while (lines.next()) |line| {
-            const whitespace_len = blk: {
-                if (first_non_whitespace < current.start) {
-                    break :blk 0;
-                }
-                const whitespace_past_start = first_non_whitespace - current.start;
-                const indent_truncated = whitespace_past_start / current.width;
-                const indent_remainder = whitespace_past_start - current_indent_truncated * current.width;
-                const truncated_whitespace_len = indent_truncated * current.width;
-            };
-        }
+        // TODO:
+        //while (lines.next()) |line| {
+        //    const whitespace_len = blk: {
+        //        if (first_non_whitespace < current.start) {
+        //            break :blk 0;
+        //        }
+        //        const whitespace_past_start = first_non_whitespace - current.start;
+        //        const indent_truncated = whitespace_past_start / current.width;
+        //        const indent_remainder = whitespace_past_start - current_indent_truncated * current.width;
+        //        const truncated_whitespace_len = indent_truncated * current.width;
+        //    };
+        //}
     }
 }
 
