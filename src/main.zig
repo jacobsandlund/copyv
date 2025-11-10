@@ -3,8 +3,8 @@ const std = @import("std");
 const Action = enum {
     pull,
     get,
-    get_frozen,
-    check_frozen,
+    get_freeze,
+    check_freeze,
 };
 
 const FileTypeInfo = struct {
@@ -203,7 +203,7 @@ fn updateChunk(
     if (std.mem.startsWith(u8, first_arg, "g")) { // get, go, g
         if (line_args.peek()) |peek| {
             if (std.mem.startsWith(u8, peek, "fr")) { // freeze, frozen, fr
-                action = .get_frozen;
+                action = .get_freeze;
                 _ = line_args.next(); // skip fr[ozen]
             } else {
                 action = .get;
@@ -213,7 +213,7 @@ fn updateChunk(
         }
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.startsWith(u8, first_arg, "fr")) { // freeze, frozen, fr
-        action = .check_frozen;
+        action = .check_freeze;
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.startsWith(u8, first_arg, "e")) { // end
         if (maybe_in_frozen_chunk.*) {
@@ -236,22 +236,22 @@ fn updateChunk(
     var path_parts = std.mem.splitScalar(u8, ref_with_path, '/');
     const ref = path_parts.next().?;
 
-    if (action == .check_frozen) {
+    if (action == .check_freeze) {
         maybe_in_frozen_chunk.* = true;
 
         if (ref.len != 40) {
-            std.debug.panic("{s}[{d}]: Frozen copyv line must point to a commit SHA\n", .{
+            std.debug.panic("{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n", .{
                 file_name,
                 start_line_number,
             });
         }
 
-        if (std.mem.eql(u8, first_arg, "frozen")) {
+        if (std.mem.eql(u8, first_arg, "freeze")) {
             return false;
         } else {
             const updated_line = try std.fmt.allocPrint(
                 allocator,
-                "{s} frozen {s}",
+                "{s} freeze {s}",
                 .{ prefix, url_with_line_numbers },
             );
             try updated_bytes.appendSlice(allocator, updated_line);
@@ -273,7 +273,7 @@ fn updateChunk(
     const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
     const base_file_bytes = try fetchFile(allocator, base_url);
 
-    if (action == .get_frozen) {
+    if (action == .get_freeze) {
         const frozen_sha = if (ref.len == 40)
             ref
         else
@@ -281,7 +281,7 @@ fn updateChunk(
         const base_bytes = try getLines(base_file_bytes, base_start, base_end);
         const updated_line = try std.fmt.allocPrint(
             allocator,
-            "{s} frozen {s}/blob/{s}/{s}#{s}",
+            "{s} freeze {s}/blob/{s}/{s}#{s}",
             .{ prefix, original_host, frozen_sha, path, line_numbers_str },
         );
         try updated_bytes.appendSlice(allocator, updated_line);
