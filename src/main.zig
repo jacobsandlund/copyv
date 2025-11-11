@@ -499,19 +499,19 @@ fn updateChunk(
         base_end = base_start;
     }
 
+    const base_sha = if (ref.len == 40)
+        ref
+    else
+        try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
     const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
     const base_file_bytes = try fetchFile(allocator, base_url);
 
     if (action == .get_freeze) {
-        const frozen_sha = if (ref.len == 40)
-            ref
-        else
-            try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
         const base_bytes = try getLines(base_file_bytes, base_start, base_end);
         const updated_line = try std.fmt.allocPrint(
             allocator,
             "{s} freeze {s}/blob/{s}/{s}#{s}",
-            .{ prefix, original_host, frozen_sha, path, line_numbers_str },
+            .{ prefix, original_host, base_sha, path, line_numbers_str },
         );
         try updated_bytes.appendSlice(allocator, updated_line);
         try updated_bytes.append(allocator, '\n');
@@ -529,9 +529,21 @@ fn updateChunk(
         return .updated;
     }
 
-    const latest_sha = try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
-    const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}/{s}", .{ repo, latest_sha, path });
-    const new_file_bytes = try fetchFile(allocator, new_url);
+    const new_sha = if (ref.len == 40)
+        try fetchLatestCommitSha(allocator, sha_cache, repo, "HEAD")
+    else
+        base_sha;
+    var new_file_bytes: []const u8 = undefined;
+    if (std.mem.eql(u8, base_sha, new_sha)) {
+        new_file_bytes = base_file_bytes;
+    } else {
+        const new_url = try std.fmt.allocPrint(
+            allocator,
+            "https://raw.githubusercontent.com/{s}/{s}/{s}",
+            .{ repo, new_sha, path },
+        );
+        new_file_bytes = try fetchFile(allocator, new_url);
+    }
 
     // Diff the files
 
@@ -746,7 +758,7 @@ fn updateChunk(
     const updated_url = try std.fmt.allocPrint(
         allocator,
         "{s} track {s}/blob/{s}/{s}#L{d}-L{d}",
-        .{ prefix, original_host, latest_sha, path, new_start, new_end },
+        .{ prefix, original_host, new_sha, path, new_start, new_end },
     );
     try updated_bytes.appendSlice(allocator, updated_url);
     try updated_bytes.append(allocator, '\n');
@@ -784,15 +796,14 @@ fn fetchLatestCommitSha(
     repo: []const u8,
     ref: []const u8,
 ) ![]const u8 {
-    const latest_ref = if (ref.len == 40) "HEAD" else ref;
-    const cache_key: ShaCacheKey = .{ .repo = repo, .ref = latest_ref };
+    const cache_key: ShaCacheKey = .{ .repo = repo, .ref = ref };
 
     const gop = try sha_cache.getOrPut(cache_key);
     if (gop.found_existing) {
         return gop.value_ptr.*;
     }
 
-    const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, latest_ref });
+    const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, ref });
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
@@ -834,7 +845,7 @@ fn fetchLatestCommitSha(
     const cache_allocator = sha_cache.allocator;
     gop.key_ptr.* = .{
         .repo = try cache_allocator.dupe(u8, repo),
-        .ref = try cache_allocator.dupe(u8, latest_ref),
+        .ref = try cache_allocator.dupe(u8, ref),
     };
     const sha_owned = try cache_allocator.dupe(u8, sha.string);
     gop.value_ptr.* = sha_owned;
