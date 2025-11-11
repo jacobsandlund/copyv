@@ -49,6 +49,7 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var line_number: usize = 1;
     var has_update = false;
+    var has_conflicts = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
     var indent: ?Indent = null;
@@ -65,7 +66,13 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
                 &indent,
                 file_type_info,
             )) {
-                .updated => has_update = true,
+                .updated => {
+                    has_update = true;
+                },
+                .updated_with_conflicts => {
+                    has_update = true;
+                    has_conflicts = true;
+                },
                 .untouched => {},
                 .not_a_chunk => {
                     try updated_bytes.appendSlice(allocator, line);
@@ -80,6 +87,32 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
 
     if (has_update) {
         try dir.writeFile(.{ .sub_path = file_name, .data = updated_bytes.items });
+    }
+    if (has_conflicts) {
+        const head_result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "git", "rev-parse", "HEAD" },
+        });
+        const git_dir_result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "git", "rev-parse", "--git-dir" },
+        });
+
+        const git_dir = std.mem.trimEnd(u8, git_dir_result.stdout, &std.ascii.whitespace);
+        const merge_head_path = try std.fs.path.join(allocator, &.{ git_dir, "MERGE_HEAD" });
+        std.debug.print("merge_head_path: '{s}'\n", .{merge_head_path});
+
+        try std.fs.cwd().writeFile(.{ .sub_path = merge_head_path, .data = head_result.stdout });
+        //_ = try std.process.Child.run(.{
+        //    .allocator = allocator,
+        //    .cwd_dir = dir,
+        //    .argv = &.{
+        //        "git",
+        //        "update-index",
+        //        "--unresolve",
+        //        file_name,
+        //    },
+        //});
     }
 }
 
@@ -167,6 +200,7 @@ fn appendEndTag(
 
 const ChunkStatus = enum {
     updated,
+    updated_with_conflicts,
     untouched,
     not_a_chunk,
 };
@@ -332,14 +366,14 @@ fn updateChunk(
     try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_file_bytes });
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_file_bytes });
 
-    const stdout_slice = try runCommand(
-        allocator,
-        &[_][]const u8{ "git", "diff", "--no-index", base_file_name, new_file_name },
-    );
+    const diff_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "git", "diff", "--no-index", base_file_name, new_file_name },
+    });
 
     // Check if diff is in the chunk
 
-    var diff_lines = std.mem.splitScalar(u8, stdout_slice, '\n');
+    var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
     var base_line: usize = 0;
     var new_line: usize = 0;
     var new_start: usize = 0;
@@ -445,6 +479,7 @@ fn updateChunk(
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_indented.items });
 
     var updated_chunk: []const u8 = new_indented.items;
+    var has_conflicts = false;
 
     // Get the current chunk
     if (action == .track) {
@@ -465,13 +500,15 @@ fn updateChunk(
             const current_file_name = "tmp/current_file";
             try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
 
-            const conflict_style_output = try runCommand(
-                allocator,
-                &[_][]const u8{ "git", "config", "--get", "merge.conflictstyle" },
-            );
-            const conflict_style = std.mem.trim(u8, conflict_style_output, line_whitespace);
+            const config_result = try std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{ "git", "config", "--get", "merge.conflictstyle" },
+            });
+            const conflict_style = std.mem.trim(u8, config_result.stdout, line_whitespace);
             var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 7);
-            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "git", "merge-file", "-p" });
+            merge_args.appendSliceAssumeCapacity(
+                &[_][]const u8{ "git", "merge-file", "-p" },
+            );
 
             if (std.mem.eql(u8, conflict_style, "diff3")) {
                 merge_args.appendAssumeCapacity("--diff3");
@@ -481,7 +518,31 @@ fn updateChunk(
 
             merge_args.appendSliceAssumeCapacity(&[_][]const u8{ current_file_name, base_file_name, new_file_name });
 
-            updated_chunk = try runCommand(allocator, merge_args.items);
+            const merge_result = try std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = merge_args.items,
+            });
+            updated_chunk = merge_result.stdout;
+
+            switch (merge_result.term) {
+                .Exited => |code| {
+                    if (code >= 127) {
+                        std.debug.panic("{s}[{d}]: Unexpected merge result error code: {d}\n", .{
+                            file_name,
+                            start_line_number,
+                            code,
+                        });
+                    } else if (code != 0) {
+                        has_conflicts = true;
+                    }
+                },
+                else => {
+                    std.debug.panic("{s}[{d}]: Unexpected merge result term\n", .{
+                        file_name,
+                        start_line_number,
+                    });
+                },
+            }
         }
     }
 
@@ -499,7 +560,11 @@ fn updateChunk(
     try appendEndTag(allocator, updated_bytes, prefix);
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
-    return .updated;
+    if (has_conflicts) {
+        return .updated_with_conflicts;
+    } else {
+        return .updated;
+    }
 }
 
 const GitRange = struct {
@@ -517,18 +582,6 @@ fn parseRange(range_str: []const u8) !GitRange {
 }
 
 const max_output_bytes = 100_000_000;
-
-fn runCommand(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
-    var stderr = std.ArrayList(u8).empty;
-    var stdout = std.ArrayList(u8).empty;
-    var child_proc = std.process.Child.init(args, allocator);
-    child_proc.stdout_behavior = .Pipe;
-    child_proc.stderr_behavior = .Pipe;
-    try child_proc.spawn();
-    try child_proc.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
-    _ = try child_proc.wait();
-    return try stdout.toOwnedSlice(allocator);
-}
 
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
