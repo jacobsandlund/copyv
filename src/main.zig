@@ -49,14 +49,13 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var line_number: usize = 1;
     var has_update = false;
-    var maybe_in_frozen_chunk = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
     var indent: ?Indent = null;
 
     while (lines.next()) |line| : (line_number += 1) {
         if (mightMatchTag(line)) {
-            if (try updateChunk(
+            switch (try updateChunk(
                 allocator,
                 file_name,
                 line_number,
@@ -65,12 +64,13 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
                 line,
                 &indent,
                 file_type_info,
-                &maybe_in_frozen_chunk,
             )) {
-                has_update = true;
-            } else {
-                try updated_bytes.appendSlice(allocator, line);
-                try maybeAppendNewline(allocator, &updated_bytes, &lines);
+                .updated => has_update = true,
+                .untouched => {},
+                .not_a_chunk => {
+                    try updated_bytes.appendSlice(allocator, line);
+                    try maybeAppendNewline(allocator, &updated_bytes, &lines);
+                },
             }
         } else {
             try updated_bytes.appendSlice(allocator, line);
@@ -152,23 +152,6 @@ fn matchesTag(
     return null;
 }
 
-fn matchesEndTag(file_name: []const u8, line_number: usize, line: []const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, line, prefix)) return false;
-
-    const trimmed = std.mem.trimStart(u8, line[prefix.len..], line_whitespace);
-    if (!std.mem.startsWith(u8, trimmed, "e")) { // "end"
-        std.debug.panic(
-            "{s}[{d}]: Expected copyv: end, but got another copyv line while still in a copyv section\n",
-            .{
-                file_name,
-                line_number,
-            },
-        );
-    }
-
-    return true;
-}
-
 fn appendEndTag(
     allocator: std.mem.Allocator,
     bytes: *std.ArrayList(u8),
@@ -182,6 +165,12 @@ fn appendEndTag(
     try bytes.appendSlice(allocator, end_line);
 }
 
+const ChunkStatus = enum {
+    updated,
+    untouched,
+    not_a_chunk,
+};
+
 fn updateChunk(
     allocator: std.mem.Allocator,
     file_name: []const u8,
@@ -191,8 +180,7 @@ fn updateChunk(
     current_line: []const u8,
     lazy_file_indent: *?Indent,
     file_type_info: FileTypeInfo,
-    maybe_in_frozen_chunk: *bool,
-) !bool {
+) !ChunkStatus {
     // Check if matches tag
     const maybe_match = matchesTag(
         current_line,
@@ -200,7 +188,11 @@ fn updateChunk(
         lazy_file_indent,
         lines.buffer,
     );
-    if (maybe_match == null) return false;
+
+    if (maybe_match == null) {
+        return .not_a_chunk;
+    }
+
     const match = maybe_match.?;
     const prefix = match.prefix;
     const indent = match.indent;
@@ -213,34 +205,42 @@ fn updateChunk(
     var action: Action = undefined;
     var url_with_line_numbers: []const u8 = undefined;
 
-    if (std.mem.startsWith(u8, first_arg, "t")) { // track, t
+    if (std.mem.eql(u8, first_arg, "track")) {
         action = .track;
         url_with_line_numbers = line_args.rest();
-    } else if (std.mem.startsWith(u8, first_arg, "fr")) { // freeze, frozen, fr
+    } else if (std.mem.eql(u8, first_arg, "freeze")) {
         action = .check_freeze;
         url_with_line_numbers = line_args.rest();
-    } else if (std.mem.startsWith(u8, first_arg, "e")) { // end
-        if (maybe_in_frozen_chunk.*) {
-            return false;
-        } else {
-            std.debug.panic("{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n", .{ file_name, start_line_number });
-        }
+    } else if (std.mem.eql(u8, first_arg, "end")) {
+        std.debug.panic(
+            "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
+            .{ file_name, start_line_number },
+        );
     } else { // get
-        if (std.mem.startsWith(u8, first_arg, "g")) { // get, go, g
+        if (std.mem.startsWith(u8, first_arg, "g")) { // get
             if (line_args.peek()) |peek| {
-                if (std.mem.startsWith(u8, peek, "fr")) { // freeze, frozen, fr
+                if (std.mem.startsWith(u8, peek, "fr")) { // freeze
                     action = .get_freeze;
-                    _ = line_args.next(); // skip fr[ozen]
+                    _ = line_args.next(); // skip fr[eeze]
                 } else {
                     action = .get;
                 }
             } else {
-                std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{ file_name, start_line_number });
+                std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{
+                    file_name,
+                    start_line_number,
+                });
             }
             url_with_line_numbers = line_args.rest();
-        } else {
+        } else if (std.mem.startsWith(u8, first_arg, "http")) {
             action = .get;
             url_with_line_numbers = first_arg;
+        } else {
+            std.debug.panic("{s}[{d}]: Unknown action: {s}\n", .{
+                file_name,
+                start_line_number,
+                first_arg,
+            });
         }
     }
 
@@ -254,29 +254,28 @@ fn updateChunk(
     const ref = path_parts.next().?;
 
     if (action == .check_freeze) {
-        maybe_in_frozen_chunk.* = true;
-
         if (ref.len != 40) {
-            std.debug.panic("{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n", .{
-                file_name,
-                start_line_number,
-            });
+            std.debug.panic(
+                "{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n",
+                .{ file_name, start_line_number },
+            );
         }
 
-        if (std.mem.eql(u8, first_arg, "freeze")) {
-            return false;
-        } else {
-            const updated_line = try std.fmt.allocPrint(
-                allocator,
-                "{s} freeze {s}",
-                .{ prefix, url_with_line_numbers },
-            );
-            try updated_bytes.appendSlice(allocator, updated_line);
-            try maybeAppendNewline(allocator, updated_bytes, lines);
-            return true;
-        }
-    } else {
-        maybe_in_frozen_chunk.* = false;
+        const current_start = current_line.ptr - lines.buffer.ptr;
+        const end_line = skipToEndLine(
+            lines,
+            prefix,
+            file_name,
+            start_line_number,
+        );
+        const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
+        try updated_bytes.appendSlice(
+            allocator,
+            lines.buffer[current_start..current_end],
+        );
+        try maybeAppendNewline(allocator, updated_bytes, lines);
+
+        return .untouched;
     }
 
     const path = path_parts.rest();
@@ -303,12 +302,18 @@ fn updateChunk(
         );
         try updated_bytes.appendSlice(allocator, updated_line);
         try updated_bytes.append(allocator, '\n');
-        try matchIndent(allocator, updated_bytes, base_bytes, indent, file_type_info.common_indent_width);
+        try matchIndent(
+            allocator,
+            updated_bytes,
+            base_bytes,
+            indent,
+            file_type_info.common_indent_width,
+        );
         try updated_bytes.append(allocator, '\n');
         try appendEndTag(allocator, updated_bytes, prefix);
         try maybeAppendNewline(allocator, updated_bytes, lines);
 
-        return true;
+        return .updated;
     }
 
     const latest_sha = try fetchLatestCommitSha(allocator, repo, ref);
@@ -417,8 +422,20 @@ fn updateChunk(
     const new_bytes = try getLines(new_file_bytes, new_start, new_end);
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
-    try matchIndent(allocator, &base_indented, base_bytes, indent, file_type_info.common_indent_width);
-    try matchIndent(allocator, &new_indented, new_bytes, indent, file_type_info.common_indent_width);
+    try matchIndent(
+        allocator,
+        &base_indented,
+        base_bytes,
+        indent,
+        file_type_info.common_indent_width,
+    );
+    try matchIndent(
+        allocator,
+        &new_indented,
+        new_bytes,
+        indent,
+        file_type_info.common_indent_width,
+    );
     try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_indented.items });
     try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_indented.items });
 
@@ -426,41 +443,15 @@ fn updateChunk(
 
     // Get the current chunk
     if (action == .track) {
-        const chunk_len = base_end - base_start + 1;
         const current_bytes = lines.buffer;
         const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
-        var line_number = start_line_number;
-
-        const current_end = for (0..chunk_len - 1) |_| {
-            if (lines.next()) |line| {
-                line_number += 1;
-                if (matchesEndTag(file_name, line_number, line, prefix)) {
-                    break line.ptr - current_bytes.ptr - 1;
-                }
-            } else break current_bytes.len;
-        } else end_blk: {
-            const maybe_end = maybe_blk: {
-                if (lines.next()) |line| {
-                    line_number += 1;
-                    if (matchesEndTag(file_name, line_number, line, prefix)) {
-                        break :end_blk line.ptr - current_bytes.ptr - 1;
-                    } else {
-                        break :maybe_blk line.ptr - current_bytes.ptr + line.len;
-                    }
-                } else break :end_blk current_bytes.len;
-            };
-
-            const maybe_chunk = current_bytes[current_start..maybe_end];
-            if (std.mem.eql(u8, maybe_chunk, base_indented.items)) {
-                break :end_blk maybe_end;
-            }
-
-            while (lines.next()) |line| : (line_number += 1) {
-                if (matchesEndTag(file_name, line_number, line, prefix)) {
-                    break :end_blk line.ptr - current_bytes.ptr - 1;
-                }
-            } else break :end_blk current_bytes.len;
-        };
+        const end_line = skipToEndLine(
+            lines,
+            prefix,
+            file_name,
+            start_line_number,
+        );
+        const current_end = end_line.ptr - lines.buffer.ptr - 1;
 
         // Determine updated chunk bytes
 
@@ -503,7 +494,7 @@ fn updateChunk(
     try appendEndTag(allocator, updated_bytes, prefix);
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
-    return true;
+    return .updated;
 }
 
 const GitRange = struct {
@@ -585,6 +576,42 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
     }
 
     return bytes[start..end];
+}
+
+fn skipToEndLine(
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    prefix: []const u8,
+    file_name: []const u8,
+    start_line_number: usize,
+) []const u8 {
+    var line_number = start_line_number;
+
+    var nesting: usize = 0;
+    return while (lines.next()) |line| : (line_number += 1) {
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+
+        const trimmed = std.mem.trimStart(u8, line[prefix.len..], line_whitespace);
+
+        if (std.mem.eql(u8, trimmed, "end")) {
+            if (nesting == 0) {
+                break line;
+            }
+
+            nesting -= 1;
+        } else if (std.mem.startsWith(u8, trimmed, "fr") or // "freeze"
+            std.mem.startsWith(u8, trimmed, "tr") // "track"
+        ) {
+            nesting += 1;
+        }
+    } else {
+        std.debug.panic(
+            "{s}[{d}]: Expected copyv: end, but instead reached end of file\n",
+            .{
+                file_name,
+                line_number,
+            },
+        );
+    };
 }
 
 const shift_count_threshold = 8;

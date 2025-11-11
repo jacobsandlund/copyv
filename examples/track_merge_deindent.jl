@@ -43,3 +43,4 @@ global function derive_char_width(code, category)
 
     return width
 end
+# copyv: end

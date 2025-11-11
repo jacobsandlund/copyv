@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // copyv: freeze https://github.com/ghostty-org/ghostty/blob/26e9b0a0f3b07149c7fd7474519eba6b21f8c5fd/src/benchmark/CodepointWidth.zig#L134-L165
 fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));
@@ -33,3 +35,5 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     }
 }
 // copyv: end
+
+// copyv: https://github.com/jacobsandlund/uucode/blob/main/src/types.zig#L1078-L1092
