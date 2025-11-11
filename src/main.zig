@@ -499,15 +499,20 @@ fn updateChunk(
         base_end = base_start;
     }
 
-    const base_sha = if (ref.len == 40)
-        ref
+    const base_sha = if (ref.len != 40 or action == .get)
+        try fetchLatestCommitSha(allocator, sha_cache, repo, ref)
     else
-        try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
-    const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
-    const base_file_bytes = try fetchFile(allocator, base_url);
+        ref;
+    const base_file = try fetchFile(
+        allocator,
+        temp_dir,
+        repo,
+        base_sha,
+        path,
+    );
+    const base_bytes = try getLines(base_file.data, base_start, base_end);
 
     if (action == .get_freeze) {
-        const base_bytes = try getLines(base_file_bytes, base_start, base_end);
         const updated_line = try std.fmt.allocPrint(
             allocator,
             "{s} freeze {s}/blob/{s}/{s}#{s}",
@@ -529,126 +534,7 @@ fn updateChunk(
         return .updated;
     }
 
-    const new_sha = if (ref.len == 40)
-        try fetchLatestCommitSha(allocator, sha_cache, repo, "HEAD")
-    else
-        base_sha;
-    var new_file_bytes: []const u8 = undefined;
-    if (std.mem.eql(u8, base_sha, new_sha)) {
-        new_file_bytes = base_file_bytes;
-    } else {
-        const new_url = try std.fmt.allocPrint(
-            allocator,
-            "https://raw.githubusercontent.com/{s}/{s}/{s}",
-            .{ repo, new_sha, path },
-        );
-        new_file_bytes = try fetchFile(allocator, new_url);
-    }
-
-    // Diff the files
-
-    try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_file_bytes });
-    try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_file_bytes });
-    var base_file_name_buffer: [1024]u8 = undefined;
-    var new_file_name_buffer: [1024]u8 = undefined;
-    const base_file_name = try temp_dir.dir.realpath("base", &base_file_name_buffer);
-    const new_file_name = try temp_dir.dir.realpath("new", &new_file_name_buffer);
-
-    const diff_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ "git", "diff", "--no-index", base_file_name, new_file_name },
-    });
-
-    // Check if diff is in the chunk
-
-    var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
-    var base_line: usize = 0;
-    var new_line: usize = 0;
-    var new_start: usize = 0;
-    var new_end: usize = 0;
-    var base_range: GitRange = .{ .start = 0, .len = 0 };
-    var new_range: GitRange = .{ .start = 0, .len = 0 };
-    var has_diff_in_chunk = false;
-    var last_diff_delta: isize = 0;
-
-    for (0..4) |_| _ = diff_lines.next(); // Skip diff header
-
-    while (diff_lines.next()) |diff_line| {
-        if (std.mem.startsWith(u8, diff_line, "@@")) {
-            std.debug.assert(base_line == base_range.start + base_range.len);
-            std.debug.assert(new_line == new_range.start + new_range.len);
-            var header_parts = std.mem.splitScalar(u8, diff_line, ' ');
-            _ = header_parts.next().?; // skip @@
-            base_range = try parseRange(header_parts.next().?);
-            new_range = try parseRange(header_parts.next().?);
-            base_line = base_range.start;
-            new_line = new_range.start;
-            last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
-            const base_range_end = base_range.start + base_range.len;
-
-            if ((base_line <= base_start and base_end <= base_range_end) or
-                (base_start <= base_line and base_range_end <= base_end) or
-                (base_line < base_start and base_start < base_range_end) or
-                (base_start < base_line and base_line < base_end))
-            {
-                has_diff_in_chunk = true;
-            }
-
-            if (new_start == 0 and base_line > base_start) {
-                const delta: usize = base_line - base_start;
-                new_start = new_line - delta;
-            }
-            if (new_end == 0 and base_line > base_end) {
-                const delta: usize = base_line - base_end;
-                new_end = new_line - delta;
-            }
-        } else if (std.mem.startsWith(u8, diff_line, "-")) {
-            base_line += 1;
-        } else if (std.mem.startsWith(u8, diff_line, "+")) {
-            new_line += 1;
-        } else {
-            // Either it's a shared line or the last empty line of the diff
-            std.debug.assert(std.mem.startsWith(u8, diff_line, " ") or diff_lines.peek() == null);
-            base_line += 1;
-            new_line += 1;
-        }
-
-        if (base_line == base_start and new_start == 0) {
-            new_start = new_line;
-        }
-        if (base_line == base_end) {
-            new_end = new_line;
-        }
-    }
-
-    if (has_diff_in_chunk) {
-        // We've at least set the start because the diff affected the chunk
-        std.debug.assert(new_start != 0);
-
-        if (new_end == 0) {
-            // The only diffs were before the end of this chunk
-            std.debug.assert(base_line < base_end);
-            const delta: isize = @intCast(new_line - base_line);
-            new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
-        }
-    } else {
-        // None of the diffs affected the chunk
-
-        if (new_start == 0) {
-            std.debug.assert(new_end == 0);
-            new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
-            new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
-        } else {
-            std.debug.assert(new_end - new_start == base_end - base_start);
-        }
-    }
-
-    // Write base and new files
-
-    const base_bytes = try getLines(base_file_bytes, base_start, base_end);
-    const new_bytes = try getLines(new_file_bytes, new_start, new_end);
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
-    var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
     try matchIndent(
         allocator,
         &base_indented,
@@ -656,21 +542,147 @@ fn updateChunk(
         indent,
         file_type_info.common_indent_width,
     );
-    try matchIndent(
-        allocator,
-        &new_indented,
-        new_bytes,
-        indent,
-        file_type_info.common_indent_width,
-    );
-    try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
-    try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
 
-    var updated_chunk: []const u8 = new_indented.items;
+    const new_sha = if (ref.len != 40 or action == .get)
+        base_sha
+    else
+        try fetchLatestCommitSha(allocator, sha_cache, repo, "HEAD");
+
+    var new_start: usize = undefined;
+    var new_end: usize = undefined;
+    var updated_chunk: []const u8 = undefined;
     var has_conflicts = false;
 
-    // Get the current chunk
-    if (action == .track) {
+    if (std.mem.eql(u8, new_sha, base_sha)) {
+        new_start = base_start;
+        new_end = base_end;
+        updated_chunk = base_indented.items;
+    } else {
+        new_start = 0;
+        new_end = 0;
+        std.debug.assert(action == .track);
+        const new_file = try fetchFile(
+            allocator,
+            temp_dir,
+            repo,
+            new_sha,
+            path,
+        );
+
+        // Diff the files
+
+        var base_file_path_buffer: [1024]u8 = undefined;
+        var new_file_path_buffer: [1024]u8 = undefined;
+        const base_file_path = try temp_dir.dir.realpath(base_file.name, &base_file_path_buffer);
+        const new_file_path = try temp_dir.dir.realpath(new_file.name, &new_file_path_buffer);
+
+        const diff_result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "git", "diff", "--no-index", base_file_path, new_file_path },
+        });
+
+        // Check if diff is in the chunk
+
+        var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
+        var base_line: usize = 0;
+        var new_line: usize = 0;
+        var base_range: GitRange = .{ .start = 0, .len = 0 };
+        var new_range: GitRange = .{ .start = 0, .len = 0 };
+        var has_diff_in_chunk = false;
+        var last_diff_delta: isize = 0;
+
+        for (0..4) |_| _ = diff_lines.next(); // Skip diff header
+
+        while (diff_lines.next()) |diff_line| {
+            if (std.mem.startsWith(u8, diff_line, "@@")) {
+                std.debug.assert(base_line == base_range.start + base_range.len);
+                std.debug.assert(new_line == new_range.start + new_range.len);
+                var header_parts = std.mem.splitScalar(u8, diff_line, ' ');
+                _ = header_parts.next().?; // skip @@
+                base_range = try parseRange(header_parts.next().?);
+                new_range = try parseRange(header_parts.next().?);
+                base_line = base_range.start;
+                new_line = new_range.start;
+                last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
+                const base_range_end = base_range.start + base_range.len;
+
+                if ((base_line <= base_start and base_end <= base_range_end) or
+                    (base_start <= base_line and base_range_end <= base_end) or
+                    (base_line < base_start and base_start < base_range_end) or
+                    (base_start < base_line and base_line < base_end))
+                {
+                    has_diff_in_chunk = true;
+                }
+
+                if (new_start == 0 and base_line > base_start) {
+                    const delta: usize = base_line - base_start;
+                    new_start = new_line - delta;
+                }
+                if (new_end == 0 and base_line > base_end) {
+                    const delta: usize = base_line - base_end;
+                    new_end = new_line - delta;
+                }
+            } else if (std.mem.startsWith(u8, diff_line, "-")) {
+                base_line += 1;
+            } else if (std.mem.startsWith(u8, diff_line, "+")) {
+                new_line += 1;
+            } else {
+                // Either it's a shared line or the last empty line of the diff
+                std.debug.assert(std.mem.startsWith(u8, diff_line, " ") or diff_lines.peek() == null);
+                base_line += 1;
+                new_line += 1;
+            }
+
+            if (base_line == base_start and new_start == 0) {
+                new_start = new_line;
+            }
+            if (base_line == base_end) {
+                new_end = new_line;
+            }
+        }
+
+        if (has_diff_in_chunk) {
+            // We've at least set the start because the diff affected the chunk
+            std.debug.assert(new_start != 0);
+
+            if (new_end == 0) {
+                // The only diffs were before the end of this chunk
+                std.debug.assert(base_line < base_end);
+                const delta: isize = @intCast(new_line - base_line);
+                new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
+            }
+        } else {
+            // None of the diffs affected the chunk
+
+            if (new_start == 0) {
+                std.debug.assert(new_end == 0);
+                new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
+                new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
+            } else {
+                std.debug.assert(new_end - new_start == base_end - base_start);
+            }
+        }
+
+        // Write base and new files
+
+        const new_bytes = try getLines(new_file.data, new_start, new_end);
+        var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
+        try matchIndent(
+            allocator,
+            &new_indented,
+            new_bytes,
+            indent,
+            file_type_info.common_indent_width,
+        );
+
+        try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
+        try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
+        var base_chunk_path_buffer: [1024]u8 = undefined;
+        var new_chunk_path_buffer: [1024]u8 = undefined;
+        const base_chunk_path = try temp_dir.dir.realpath("base", &base_chunk_path_buffer);
+        const new_chunk_path = try temp_dir.dir.realpath("new", &new_chunk_path_buffer);
+
+        // Get the current chunk
         const current_bytes = lines.buffer;
         const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
         const end_line = skipToEndLine(
@@ -685,12 +697,14 @@ fn updateChunk(
         // Determine updated chunk bytes
 
         const current_chunk = current_bytes[current_start..current_end];
-        if (!std.mem.eql(u8, current_chunk, base_indented.items)) {
+        if (std.mem.eql(u8, current_chunk, base_indented.items)) {
+            updated_chunk = new_indented.items;
+        } else {
             try temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
-            var current_file_name_buffer: [1024]u8 = undefined;
-            const current_file_name = try temp_dir.dir.realpath(
+            var current_chunk_path_buffer: [1024]u8 = undefined;
+            const current_chunk_path = try temp_dir.dir.realpath(
                 "current",
-                &current_file_name_buffer,
+                &current_chunk_path_buffer,
             );
 
             const config_result = try std.process.Child.run(.{
@@ -720,9 +734,9 @@ fn updateChunk(
             merge_args.appendSliceAssumeCapacity(&[_][]const u8{
                 "-L",
                 "theirs",
-                current_file_name,
-                base_file_name,
-                new_file_name,
+                current_chunk_path,
+                base_chunk_path,
+                new_chunk_path,
             });
 
             const merge_result = try std.process.Child.run(.{
@@ -788,8 +802,6 @@ fn parseRange(range_str: []const u8) !GitRange {
     return .{ .start = start, .len = len };
 }
 
-const max_output_bytes = 100_000_000;
-
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
     sha_cache: *ShaCache,
@@ -852,7 +864,31 @@ fn fetchLatestCommitSha(
     return sha_owned;
 }
 
-fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
+const max_file_bytes = 100_000_000;
+
+const File = struct {
+    name: []const u8,
+    data: []const u8,
+};
+
+fn fetchFile(
+    allocator: std.mem.Allocator,
+    temp_dir: *TempDir,
+    repo: []const u8,
+    sha: []const u8,
+    path: []const u8,
+) !File {
+    const safe_path = try std.mem.replaceOwned(u8, allocator, path, "/", "_");
+    const name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ sha, safe_path });
+    if (temp_dir.dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
+        return .{ .name = name, .data = data };
+    }
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "https://raw.githubusercontent.com/{s}/{s}/{s}",
+        .{ repo, sha, path },
+    );
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
     _ = try client.fetch(.{
@@ -860,7 +896,9 @@ fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
         .response_writer = &aw.writer,
     });
 
-    return try aw.toOwnedSlice();
+    const data = try aw.toOwnedSlice();
+    try temp_dir.dir.writeFile(.{ .sub_path = name, .data = data });
+    return .{ .name = name, .data = data };
 }
 
 fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
