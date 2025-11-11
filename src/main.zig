@@ -282,9 +282,14 @@ fn updateChunk(
     const repo = original_host["https://github.com/".len..];
     var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
     const base_start_str = line_numbers.next().?["L".len..];
-    const base_end_str = line_numbers.next().?["L".len..];
     const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
-    const base_end = try std.fmt.parseInt(usize, base_end_str, 10);
+    var base_end: usize = undefined;
+    if (line_numbers.next()) |end_str| {
+        const base_end_str = end_str["L".len..];
+        base_end = try std.fmt.parseInt(usize, base_end_str, 10);
+    } else {
+        base_end = base_start;
+    }
 
     const base_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}", .{ repo, ref_with_path });
     const base_file_bytes = try fetchFile(allocator, base_url);
@@ -570,7 +575,8 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
     while (lines.next()) |line| : (i += 1) {
         if (i == start_line) {
             start = line.ptr - bytes.ptr;
-        } else if (i == end_line) {
+        }
+        if (i == end_line) {
             end = line.ptr - bytes.ptr + line.len;
         }
     }
