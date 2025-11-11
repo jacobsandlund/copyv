@@ -264,7 +264,6 @@ const Indent = struct {
 
 const line_whitespace = " \t";
 
-// If the tag matches, this returns the comment including whitespace.
 fn matchesTag(
     line: []const u8,
     file_type_info: FileTypeInfo,
@@ -277,9 +276,9 @@ fn matchesTag(
             const tag = line_trimmed[comment.len..];
             const tag_trimmed = std.mem.trimStart(u8, tag, line_whitespace);
             if (std.mem.startsWith(u8, tag_trimmed, copyv_tag)) {
-                const indent_start = line.len - line_trimmed.len;
+                const comment_start = line.len - line_trimmed.len;
                 const tag_whitespace = tag.len - tag_trimmed.len;
-                const prefix_len = indent_start + comment.len + tag_whitespace + copyv_tag.len;
+                const prefix_len = comment_start + comment.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
                 const file_indent = lazy_file_indent.* orelse blk: {
                     const indent = getIndent(file_bytes, file_type_info.common_indent_width);
@@ -290,7 +289,11 @@ fn matchesTag(
                 return .{
                     .prefix = prefix,
                     .indent = .{
-                        .start = indent_start,
+                        .start = getIndentStart(
+                            line[0..comment_start],
+                            file_indent.width,
+                            file_indent.char,
+                        ),
                         .width = file_indent.width,
                         .char = file_indent.char,
                     },
@@ -304,15 +307,31 @@ fn matchesTag(
 
 fn appendEndTag(
     allocator: std.mem.Allocator,
-    bytes: *std.ArrayList(u8),
-    prefix: []const u8,
+    updated_bytes: *std.ArrayList(u8),
+    indent: Indent,
+    file_type_info: FileTypeInfo,
 ) !void {
-    const end_line = try std.fmt.allocPrint(
-        allocator,
-        "{s} end",
-        .{prefix},
-    );
-    try bytes.appendSlice(allocator, end_line);
+    var whitespace: []const u8 = undefined;
+
+    if (indent.char == ' ') {
+        whitespace = try getWhitespace(
+            allocator,
+            ' ',
+            indent.start,
+        );
+    } else {
+        const num_tabs = indent.start / indent.width;
+        const num_spaces = indent.start - indent.start % indent.width;
+        whitespace = try getMixedWhitespace(
+            allocator,
+            num_tabs,
+            num_spaces,
+        );
+    }
+
+    try updated_bytes.appendSlice(allocator, whitespace);
+    try updated_bytes.appendSlice(allocator, file_type_info.comments[0]);
+    try updated_bytes.appendSlice(allocator, " copyv: end");
 }
 
 const ChunkStatus = enum {
@@ -415,7 +434,8 @@ fn updateChunk(
         const current_start = current_line.ptr - lines.buffer.ptr;
         const end_line = skipToEndLine(
             lines,
-            prefix,
+            indent,
+            file_type_info,
             file_name,
             start_line_number,
         );
@@ -466,7 +486,7 @@ fn updateChunk(
             file_type_info.common_indent_width,
         );
         try updated_bytes.append(allocator, '\n');
-        try appendEndTag(allocator, updated_bytes, prefix);
+        try appendEndTag(allocator, updated_bytes, indent, file_type_info);
         try maybeAppendNewline(allocator, updated_bytes, lines);
 
         return .updated;
@@ -604,7 +624,8 @@ fn updateChunk(
         const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
         const end_line = skipToEndLine(
             lines,
-            prefix,
+            indent,
+            file_type_info,
             file_name,
             start_line_number,
         );
@@ -676,7 +697,7 @@ fn updateChunk(
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
-    try appendEndTag(allocator, updated_bytes, prefix);
+    try appendEndTag(allocator, updated_bytes, indent, file_type_info);
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
     if (has_conflicts) {
@@ -780,26 +801,33 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
 
 fn skipToEndLine(
     lines: *std.mem.SplitIterator(u8, .scalar),
-    prefix: []const u8,
+    indent: Indent,
+    file_type_info: FileTypeInfo,
     file_name: []const u8,
     start_line_number: usize,
 ) []const u8 {
     var line_number = start_line_number;
-
+    var file_indent: ?Indent = indent;
     var nesting: usize = 0;
+
     return while (lines.next()) |line| : (line_number += 1) {
-        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        if (!mightMatchTag(line)) continue;
 
-        const trimmed = std.mem.trimStart(u8, line[prefix.len..], line_whitespace);
+        const match = matchesTag(line, file_type_info, &file_indent, "");
+        if (match == null or match.?.indent.start != indent.start) continue;
 
-        if (std.mem.eql(u8, trimmed, "end")) {
+        const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
+        var line_args = std.mem.splitScalar(u8, line_payload, ' ');
+        const first_arg = line_args.first();
+
+        if (std.mem.startsWith(u8, first_arg, "end")) {
             if (nesting == 0) {
                 break line;
             }
 
             nesting -= 1;
-        } else if (std.mem.startsWith(u8, trimmed, "fr") or // "freeze"
-            std.mem.startsWith(u8, trimmed, "tr") // "track"
+        } else if (std.mem.startsWith(u8, first_arg, "fr") or // "freeze"
+            std.mem.startsWith(u8, first_arg, "tr") // "track"
         ) {
             nesting += 1;
         }
@@ -819,7 +847,25 @@ const space_count_threshold = 5;
 const tab_count_threshold = 3;
 const max_indent_width = 16;
 
-fn getIndent(bytes: []const u8, file_type_common_indent: u8) Indent {
+fn getIndentStart(
+    whitespace: []const u8,
+    file_type_common_indent: usize,
+    indent_char: u8,
+) usize {
+    if (indent_char == ' ') {
+        return whitespace.len;
+    } else {
+        const tab_count = std.mem.count(u8, whitespace, "\t");
+        const space_count = std.mem.count(u8, whitespace, " ");
+
+        // Note: this does not consider spaces that have no impact on
+        // the indentation because they are followed by tabs, but for
+        // well-formed whitespace, that shouldn't be the case.
+        return tab_count * file_type_common_indent + space_count;
+    }
+}
+
+fn getIndent(bytes: []const u8, file_type_common_indent: usize) Indent {
     var space_count: usize = 0;
     var tab_count: usize = 0;
 
@@ -842,17 +888,7 @@ fn getIndent(bytes: []const u8, file_type_common_indent: u8) Indent {
     const start = while (lines.next()) |line| {
         const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
         if (first_non_whitespace) |index| {
-            if (char == ' ') {
-                break index;
-            } else {
-                tab_count = std.mem.count(u8, line[0..index], "\t");
-                space_count = std.mem.count(u8, line[0..index], " ");
-
-                // Note: this does not consider spaces that have no impact on
-                // the indentation because they are followed by tabs, but for
-                // well-formed whitespace, that shouldn't be the case.
-                break tab_count * file_type_common_indent + space_count;
-            }
+            break getIndentStart(line[0..index], file_type_common_indent, char);
         }
     } else 0;
 
@@ -941,7 +977,7 @@ fn matchIndent(
     updated_bytes: *std.ArrayList(u8),
     bytes: []const u8,
     desired: Indent,
-    file_type_common_indent: u8,
+    file_type_common_indent: usize,
 ) !void {
     const current = getIndent(bytes, file_type_common_indent);
 
