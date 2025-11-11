@@ -89,30 +89,14 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
         try dir.writeFile(.{ .sub_path = file_name, .data = updated_bytes.items });
     }
     if (has_conflicts) {
-        const head_result = try std.process.Child.run(.{
+        const prefix_result = try std.process.Child.run(.{
             .allocator = allocator,
-            .argv = &.{ "git", "rev-parse", "HEAD" },
+            .cwd_dir = dir,
+            .argv = &.{ "git", "rev-parse", "--show-prefix" },
         });
-        const git_dir_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "git", "rev-parse", "--git-dir" },
-        });
-
-        const git_dir = std.mem.trimEnd(u8, git_dir_result.stdout, &std.ascii.whitespace);
-        const merge_head_path = try std.fs.path.join(allocator, &.{ git_dir, "MERGE_HEAD" });
-        std.debug.print("merge_head_path: '{s}'\n", .{merge_head_path});
-
-        try std.fs.cwd().writeFile(.{ .sub_path = merge_head_path, .data = head_result.stdout });
-        //_ = try std.process.Child.run(.{
-        //    .allocator = allocator,
-        //    .cwd_dir = dir,
-        //    .argv = &.{
-        //        "git",
-        //        "update-index",
-        //        "--unresolve",
-        //        file_name,
-        //    },
-        //});
+        const prefix = std.mem.trimRight(u8, prefix_result.stdout, &std.ascii.whitespace);
+        const git_path = try std.fs.path.join(allocator, &.{ prefix, file_name });
+        std.debug.print("File has conflicts: {s}\n", .{git_path});
     }
 }
 
@@ -505,18 +489,20 @@ fn updateChunk(
                 .argv = &.{ "git", "config", "--get", "merge.conflictstyle" },
             });
             const conflict_style = std.mem.trim(u8, config_result.stdout, line_whitespace);
-            var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 7);
+            var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 12);
             merge_args.appendSliceAssumeCapacity(
-                &[_][]const u8{ "git", "merge-file", "-p" },
+                &[_][]const u8{ "git", "merge-file", "-p", "-L", "ours" },
             );
 
             if (std.mem.eql(u8, conflict_style, "diff3")) {
-                merge_args.appendAssumeCapacity("--diff3");
+                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base", "--diff3" });
             } else if (std.mem.eql(u8, conflict_style, "zdiff3")) {
-                merge_args.appendAssumeCapacity("--zdiff3");
+                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base", "--zdiff3" });
+            } else {
+                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base" });
             }
 
-            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ current_file_name, base_file_name, new_file_name });
+            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "theirs", current_file_name, base_file_name, new_file_name });
 
             const merge_result = try std.process.Child.run(.{
                 .allocator = allocator,
@@ -593,10 +579,29 @@ fn fetchLatestCommitSha(
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
-    _ = try client.fetch(.{
+
+    var authorization: std.http.Client.Request.Headers.Value = undefined;
+
+    if (std.process.hasEnvVarConstant("GITHUB_TOKEN")) {
+        const token = try std.process.getEnvVarOwned(allocator, "GITHUB_TOKEN");
+        const auth_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+        authorization = .{ .override = auth_value };
+    } else {
+        authorization = .default;
+    }
+
+    const result = try client.fetch(.{
         .location = .{ .url = api_url },
         .response_writer = &aw.writer,
+        .headers = .{
+            .authorization = authorization,
+        },
     });
+
+    if (result.status == .forbidden or result.status == .too_many_requests) {
+        std.debug.print("GitHub API rate limit exceeded. Try again later or authenticate.\n", .{});
+        return error.RateLimited;
+    }
 
     const json_bytes = try aw.toOwnedSlice();
     defer allocator.free(json_bytes);
@@ -604,8 +609,11 @@ fn fetchLatestCommitSha(
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
     defer parsed.deinit();
 
-    const sha = parsed.value.object.get("sha").?.string;
-    return try allocator.dupe(u8, sha);
+    const sha = parsed.value.object.get("sha") orelse {
+        std.debug.print("GitHub API error (status {d}): {s}\n", .{ @intFromEnum(result.status), json_bytes });
+        return error.GitHubApiError;
+    };
+    return try allocator.dupe(u8, sha.string);
 }
 
 fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
