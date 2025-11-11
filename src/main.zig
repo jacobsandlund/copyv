@@ -1,4 +1,5 @@
 const std = @import("std");
+const TempDir = @import("os/TempDir.zig");
 
 const Action = enum {
     track,
@@ -151,7 +152,13 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".proto3", FileTypeInfo{ .comments = &[_][]const u8{ "//", "/*" }, .common_indent_width = 2 } },
 });
 
-fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, name: []const u8, kind: std.fs.File.Kind) !void {
+fn recursivelyUpdate(
+    arena: *std.heap.ArenaAllocator,
+    temp_dir: *TempDir,
+    parent_dir: std.fs.Dir,
+    name: []const u8,
+    kind: std.fs.File.Kind,
+) !void {
     if (kind == .directory) {
         if (name.len > 1 and name[0] == '.') return;
 
@@ -159,14 +166,19 @@ fn recursivelyUpdate(arena: *std.heap.ArenaAllocator, parent_dir: std.fs.Dir, na
         defer dir.close();
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            try recursivelyUpdate(arena, dir, entry.name, entry.kind);
+            try recursivelyUpdate(arena, temp_dir, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
-        try updateFile(arena, parent_dir, name);
+        try updateFile(arena, temp_dir, parent_dir, name);
     }
 }
 
-fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []const u8) !void {
+fn updateFile(
+    arena: *std.heap.ArenaAllocator,
+    temp_dir: *TempDir,
+    dir: std.fs.Dir,
+    file_name: []const u8,
+) !void {
     const ext = std.fs.path.extension(file_name);
     const file_type_info = file_type_info_map.get(ext) orelse return;
 
@@ -191,6 +203,7 @@ fn updateFile(arena: *std.heap.ArenaAllocator, dir: std.fs.Dir, file_name: []con
         if (mightMatchTag(line)) {
             switch (try updateChunk(
                 allocator,
+                temp_dir,
                 file_name,
                 line_number,
                 &updated_bytes,
@@ -343,6 +356,7 @@ const ChunkStatus = enum {
 
 fn updateChunk(
     allocator: std.mem.Allocator,
+    temp_dir: *TempDir,
     file_name: []const u8,
     start_line_number: usize,
     updated_bytes: *std.ArrayList(u8),
@@ -498,10 +512,12 @@ fn updateChunk(
 
     // Diff the files
 
-    const base_file_name = "tmp/base_file";
-    const new_file_name = "tmp/new_file";
-    try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_file_bytes });
-    try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_file_bytes });
+    try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_file_bytes });
+    try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_file_bytes });
+    var base_file_name_buffer: [1024]u8 = undefined;
+    var new_file_name_buffer: [1024]u8 = undefined;
+    const base_file_name = try temp_dir.dir.realpath("base", &base_file_name_buffer);
+    const new_file_name = try temp_dir.dir.realpath("new", &new_file_name_buffer);
 
     const diff_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -612,8 +628,8 @@ fn updateChunk(
         indent,
         file_type_info.common_indent_width,
     );
-    try std.fs.cwd().writeFile(.{ .sub_path = base_file_name, .data = base_indented.items });
-    try std.fs.cwd().writeFile(.{ .sub_path = new_file_name, .data = new_indented.items });
+    try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
+    try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
 
     var updated_chunk: []const u8 = new_indented.items;
     var has_conflicts = false;
@@ -635,8 +651,12 @@ fn updateChunk(
 
         const current_chunk = current_bytes[current_start..current_end];
         if (!std.mem.eql(u8, current_chunk, base_indented.items)) {
-            const current_file_name = "tmp/current_file";
-            try std.fs.cwd().writeFile(.{ .sub_path = current_file_name, .data = current_chunk });
+            try temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
+            var current_file_name_buffer: [1024]u8 = undefined;
+            const current_file_name = try temp_dir.dir.realpath(
+                "current",
+                &current_file_name_buffer,
+            );
 
             const config_result = try std.process.Child.run(.{
                 .allocator = allocator,
@@ -649,14 +669,26 @@ fn updateChunk(
             );
 
             if (std.mem.eql(u8, conflict_style, "diff3")) {
-                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base", "--diff3" });
+                merge_args.appendSliceAssumeCapacity(
+                    &[_][]const u8{ "-L", "base", "--diff3" },
+                );
             } else if (std.mem.eql(u8, conflict_style, "zdiff3")) {
-                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base", "--zdiff3" });
+                merge_args.appendSliceAssumeCapacity(
+                    &[_][]const u8{ "-L", "base", "--zdiff3" },
+                );
             } else {
-                merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "base" });
+                merge_args.appendSliceAssumeCapacity(
+                    &[_][]const u8{ "-L", "base" },
+                );
             }
 
-            merge_args.appendSliceAssumeCapacity(&[_][]const u8{ "-L", "theirs", current_file_name, base_file_name, new_file_name });
+            merge_args.appendSliceAssumeCapacity(&[_][]const u8{
+                "-L",
+                "theirs",
+                current_file_name,
+                base_file_name,
+                new_file_name,
+            });
 
             const merge_result = try std.process.Child.run(.{
                 .allocator = allocator,
@@ -1105,6 +1137,9 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
+    var temp_dir = try TempDir.init();
+    defer temp_dir.deinit();
+
     const allocator = arena.allocator();
     var arg_it = try std.process.argsWithAllocator(allocator);
     defer arg_it.deinit();
@@ -1118,5 +1153,5 @@ pub fn main() !void {
         kind = stat.kind;
     }
 
-    try recursivelyUpdate(&arena, std.fs.cwd(), name, kind);
+    try recursivelyUpdate(&arena, &temp_dir, std.fs.cwd(), name, kind);
 }
