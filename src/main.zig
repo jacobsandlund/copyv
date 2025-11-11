@@ -8,6 +8,25 @@ const Action = enum {
     check_freeze,
 };
 
+const ShaCacheKey = struct { repo: []const u8, ref: []const u8 };
+const ShaCache = std.HashMap(ShaCacheKey, []const u8, struct {
+    pub fn hash(self: @This(), key: ShaCacheKey) u64 {
+        _ = self;
+        var hasher = std.hash.Wyhash.init(718259503);
+        std.hash.autoHashStrat(&hasher, key, .Deep);
+        const result = hasher.final();
+        return result;
+    }
+
+    pub fn eql(self: @This(), a: ShaCacheKey, b: ShaCacheKey) bool {
+        _ = self;
+        return a.repo.len == b.repo.len and
+            a.ref.len == b.ref.len and
+            std.mem.eql(u8, a.repo, b.repo) and
+            std.mem.eql(u8, a.ref, b.ref);
+    }
+}, std.hash_map.default_max_load_percentage);
+
 const FileTypeInfo = struct {
     comments: []const []const u8,
     common_indent_width: u8,
@@ -155,6 +174,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
 fn recursivelyUpdate(
     arena: *std.heap.ArenaAllocator,
     temp_dir: *TempDir,
+    sha_cache: *ShaCache,
     parent_dir: std.fs.Dir,
     name: []const u8,
     kind: std.fs.File.Kind,
@@ -166,16 +186,17 @@ fn recursivelyUpdate(
         defer dir.close();
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            try recursivelyUpdate(arena, temp_dir, dir, entry.name, entry.kind);
+            try recursivelyUpdate(arena, temp_dir, sha_cache, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
-        try updateFile(arena, temp_dir, parent_dir, name);
+        try updateFile(arena, temp_dir, sha_cache, parent_dir, name);
     }
 }
 
 fn updateFile(
     arena: *std.heap.ArenaAllocator,
     temp_dir: *TempDir,
+    sha_cache: *ShaCache,
     dir: std.fs.Dir,
     file_name: []const u8,
 ) !void {
@@ -204,6 +225,7 @@ fn updateFile(
             switch (try updateChunk(
                 allocator,
                 temp_dir,
+                sha_cache,
                 file_name,
                 line_number,
                 &updated_bytes,
@@ -357,6 +379,7 @@ const ChunkStatus = enum {
 fn updateChunk(
     allocator: std.mem.Allocator,
     temp_dir: *TempDir,
+    sha_cache: *ShaCache,
     file_name: []const u8,
     start_line_number: usize,
     updated_bytes: *std.ArrayList(u8),
@@ -483,7 +506,7 @@ fn updateChunk(
         const frozen_sha = if (ref.len == 40)
             ref
         else
-            try fetchLatestCommitSha(allocator, repo, ref);
+            try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
         const base_bytes = try getLines(base_file_bytes, base_start, base_end);
         const updated_line = try std.fmt.allocPrint(
             allocator,
@@ -506,7 +529,7 @@ fn updateChunk(
         return .updated;
     }
 
-    const latest_sha = try fetchLatestCommitSha(allocator, repo, ref);
+    const latest_sha = try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
     const new_url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/{s}/{s}/{s}", .{ repo, latest_sha, path });
     const new_file_bytes = try fetchFile(allocator, new_url);
 
@@ -757,10 +780,18 @@ const max_output_bytes = 100_000_000;
 
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
+    sha_cache: *ShaCache,
     repo: []const u8,
     ref: []const u8,
 ) ![]const u8 {
     const latest_ref = if (ref.len == 40) "HEAD" else ref;
+    const cache_key: ShaCacheKey = .{ .repo = repo, .ref = latest_ref };
+
+    const gop = try sha_cache.getOrPut(cache_key);
+    if (gop.found_existing) {
+        return gop.value_ptr.*;
+    }
+
     const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, latest_ref });
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
@@ -799,7 +830,15 @@ fn fetchLatestCommitSha(
         std.debug.print("GitHub API error (status {d}): {s}\n", .{ @intFromEnum(result.status), json_bytes });
         return error.GitHubApiError;
     };
-    return try allocator.dupe(u8, sha.string);
+
+    const cache_allocator = sha_cache.allocator;
+    gop.key_ptr.* = .{
+        .repo = try cache_allocator.dupe(u8, repo),
+        .ref = try cache_allocator.dupe(u8, latest_ref),
+    };
+    const sha_owned = try cache_allocator.dupe(u8, sha.string);
+    gop.value_ptr.* = sha_owned;
+    return sha_owned;
 }
 
 fn fetchFile(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
@@ -1141,6 +1180,10 @@ pub fn main() !void {
     defer temp_dir.deinit();
 
     const allocator = arena.allocator();
+
+    var sha_cache = ShaCache.init(std.heap.page_allocator);
+    defer sha_cache.deinit();
+
     var arg_it = try std.process.argsWithAllocator(allocator);
     defer arg_it.deinit();
     _ = arg_it.next();
@@ -1153,5 +1196,5 @@ pub fn main() !void {
         kind = stat.kind;
     }
 
-    try recursivelyUpdate(&arena, &temp_dir, std.fs.cwd(), name, kind);
+    try recursivelyUpdate(&arena, &temp_dir, &sha_cache, std.fs.cwd(), name, kind);
 }
