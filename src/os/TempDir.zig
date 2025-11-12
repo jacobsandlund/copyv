@@ -1,4 +1,4 @@
-//! copyv: track https://github.com/ghostty-org/ghostty/blob/bed219c132f1940a23eba50cdd7a40e4c2718149/src/os/TempDir.zig#L1-L96
+//! copyv: track https://github.com/ghostty-org/ghostty/blob/05b580911577ae86e7a29146fac29fb368eab536/src/os/TempDir.zig#L1-L96
 //! Creates a temporary directory at runtime that can be safely used to
 //! store temporary data and is destroyed on deinit.
 const TempDir = @This();

@@ -486,7 +486,9 @@ fn updateChunk(
         return .untouched;
     }
 
-    const path = path_parts.rest();
+    const path_with_query = path_parts.rest();
+    const path_end = std.mem.indexOfScalar(u8, path_with_query, '?') orelse path_with_query.len;
+    const path = path_with_query[0..path_end];
     const repo = original_host["https://github.com/".len..];
     var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
     const base_start_str = line_numbers.next().?["L".len..];
@@ -499,10 +501,11 @@ fn updateChunk(
         base_end = base_start;
     }
 
-    const base_sha = if (ref.len != 40 or action == .get)
-        try fetchLatestCommitSha(allocator, sha_cache, repo, ref)
+    const base_sha = if (ref.len == 40)
+        ref
     else
-        ref;
+        try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
+
     const base_file = try fetchFile(
         allocator,
         temp_dir,
@@ -511,28 +514,6 @@ fn updateChunk(
         path,
     );
     const base_bytes = try getLines(base_file.data, base_start, base_end);
-
-    if (action == .get_freeze) {
-        const updated_line = try std.fmt.allocPrint(
-            allocator,
-            "{s} freeze {s}/blob/{s}/{s}#{s}",
-            .{ prefix, original_host, base_sha, path, line_numbers_str },
-        );
-        try updated_bytes.appendSlice(allocator, updated_line);
-        try updated_bytes.append(allocator, '\n');
-        try matchIndent(
-            allocator,
-            updated_bytes,
-            base_bytes,
-            indent,
-            file_type_info.common_indent_width,
-        );
-        try updated_bytes.append(allocator, '\n');
-        try appendEndTag(allocator, updated_bytes, indent, file_type_info);
-        try maybeAppendNewline(allocator, updated_bytes, lines);
-
-        return .updated;
-    }
 
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
@@ -543,7 +524,21 @@ fn updateChunk(
         file_type_info.common_indent_width,
     );
 
-    const new_sha = if (ref.len != 40 or action == .get)
+    var current_chunk: []const u8 = undefined;
+    if (action == .track) {
+        const current_start = current_line.ptr - lines.buffer.ptr + current_line.len + 1;
+        const end_line = skipToEndLine(
+            lines,
+            indent,
+            file_type_info,
+            file_name,
+            start_line_number,
+        );
+        const current_end = end_line.ptr - lines.buffer.ptr - 1;
+        current_chunk = lines.buffer[current_start..current_end];
+    }
+
+    const new_sha = if (action == .get_freeze)
         base_sha
     else
         try fetchLatestCommitSha(allocator, sha_cache, repo, "HEAD");
@@ -556,11 +551,19 @@ fn updateChunk(
     if (std.mem.eql(u8, new_sha, base_sha)) {
         new_start = base_start;
         new_end = base_end;
-        updated_chunk = base_indented.items;
+        switch (action) {
+            .get, .get_freeze => {
+                updated_chunk = base_indented.items;
+            },
+            .track => {
+                updated_chunk = current_chunk;
+            },
+            else => unreachable,
+        }
     } else {
         new_start = 0;
         new_end = 0;
-        std.debug.assert(action == .track);
+        std.debug.assert(action == .track or (action == .get and ref.len == 40));
         const new_file = try fetchFile(
             allocator,
             temp_dir,
@@ -639,6 +642,12 @@ fn updateChunk(
             }
             if (base_line == base_end) {
                 new_end = new_line;
+            } else if (base_line == base_end + 1) {
+                // In case there's a series of '-' lines followed by a series of
+                // '+' lines right at the end of the chunk, we want to capture
+                // that, so we need this extra check.
+
+                new_end = new_line - 1;
             }
         }
 
@@ -683,24 +692,12 @@ fn updateChunk(
         const base_chunk_path = try temp_dir.dir.realpath("base", &base_chunk_path_buffer);
         const new_chunk_path = try temp_dir.dir.realpath("new", &new_chunk_path_buffer);
 
-        // Get the current chunk
-        const current_bytes = lines.buffer;
-        const current_start = current_line.ptr - current_bytes.ptr + current_line.len + 1;
-        const end_line = skipToEndLine(
-            lines,
-            indent,
-            file_type_info,
-            file_name,
-            start_line_number,
-        );
-        const current_end = end_line.ptr - lines.buffer.ptr - 1;
-
         // Determine updated chunk bytes
 
-        const current_chunk = current_bytes[current_start..current_end];
-        if (std.mem.eql(u8, current_chunk, base_indented.items)) {
+        if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
         } else {
+            std.debug.assert(action == .track);
             try temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
             const current_chunk_path = try temp_dir.dir.realpath(
@@ -771,10 +768,11 @@ fn updateChunk(
 
     // Write back bytes
 
+    const command = if (action == .get_freeze) "freeze" else "track";
     const updated_url = try std.fmt.allocPrint(
         allocator,
-        "{s} track {s}/blob/{s}/{s}#L{d}-L{d}",
-        .{ prefix, original_host, new_sha, path, new_start, new_end },
+        "{s} {s} {s}/blob/{s}/{s}#L{d}-L{d}",
+        .{ prefix, command, original_host, new_sha, path_with_query, new_start, new_end },
     );
     try updated_bytes.appendSlice(allocator, updated_url);
     try updated_bytes.append(allocator, '\n');
