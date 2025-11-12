@@ -15,6 +15,8 @@ cp zig-out/bin/copyv ~/.local/bin # or somewhere on your PATH
 
 Instead of copying code from GitHub, select the desired lines, copy the URL, then add a `copyv:` comment in your code. (To get the URL, click the first line number, then shift-click the final. For markdown files, first switch to the Code tab instead of the Preview.)
 
+For example, in your `~/.config/nvim/init.lua`, add:
+
 ```lua
 -- copyv: https://github.com/nvim-telescope/telescope.nvim/blob/master/README.md?plain=1#L141-L145
 ```
