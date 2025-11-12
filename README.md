@@ -49,7 +49,7 @@ $ copyv
 
 This merges in all the changes up to the latest, including [commit `286628d`](https://github.com/nvim-telescope/telescope.nvim/commit/286628d9f2056cc71d3f3871b5ca4f3209de0dbf) which adds a missing `<leader>`, and updates the SHA:
 
-```diff
+```lua
 -- copyv: track https://github.com/nvim-telescope/telescope.nvim/blob/3a12a853ebf21ec1cce9a92290e3013f8ae75f02/README.md?plain=1#L145-L149
 local builtin = require('telescope.builtin')
 vim.keymap.set('n', '<leader>ff', builtin.find_files, { desc = 'Telescope find files' })
