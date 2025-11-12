@@ -579,6 +579,7 @@ fn updateChunk(
         const diff_result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ "git", "diff", "--no-index", base_file_path, new_file_path },
+            .max_output_bytes = max_file_bytes,
         });
 
         // Check if diff is in the chunk
@@ -742,6 +743,7 @@ fn updateChunk(
             const merge_result = try std.process.Child.run(.{
                 .allocator = allocator,
                 .argv = merge_args.items,
+                .max_output_bytes = max_file_bytes,
             });
             updated_chunk = merge_result.stdout;
 
