@@ -21,7 +21,7 @@ For example, in your `~/.config/nvim/init.lua`, add:
 -- copyv: https://github.com/nvim-telescope/telescope.nvim/blob/master/README.md?plain=1#L141-L145
 ```
 
-Run `copyv <file>` to copy the code.
+Then run `copyv <file>` to copy the code.
 
 > [!NOTE]
 > If you actually want to try running this example, use this URL instead, since this is an example of running `copyv` in the past: <https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L138-L142>
