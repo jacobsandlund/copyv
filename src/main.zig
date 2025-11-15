@@ -75,6 +75,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".bib", FileTypeInfo{ .comments = &[_][]const u8{"%"}, .common_indent_width = 2 } },
     .{ ".md", FileTypeInfo{ .comments = &[_][]const u8{"<!--"}, .common_indent_width = 2 } },
     .{ ".markdown", FileTypeInfo{ .comments = &[_][]const u8{"<!--"}, .common_indent_width = 2 } },
+    .{ ".txt", FileTypeInfo{ .comments = &[_][]const u8{"#"}, .common_indent_width = 2 } },
     .{ ".rst", FileTypeInfo{ .comments = &[_][]const u8{".."}, .common_indent_width = 2 } },
     .{ ".adoc", FileTypeInfo{ .comments = &[_][]const u8{ "//", "////" }, .common_indent_width = 2 } },
     .{ ".html", FileTypeInfo{ .comments = &[_][]const u8{"<!--"}, .common_indent_width = 2 } },
