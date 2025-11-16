@@ -8,7 +8,13 @@ const Action = enum {
     check_freeze,
 };
 
-const ShaCacheKey = struct { repo: []const u8, ref: []const u8 };
+const Platform = enum {
+    github,
+    gitlab,
+    codeberg,
+};
+
+const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
 const ShaCache = std.HashMap(ShaCacheKey, []const u8, struct {
     pub fn hash(self: @This(), key: ShaCacheKey) u64 {
         _ = self;
@@ -20,7 +26,8 @@ const ShaCache = std.HashMap(ShaCacheKey, []const u8, struct {
 
     pub fn eql(self: @This(), a: ShaCacheKey, b: ShaCacheKey) bool {
         _ = self;
-        return a.repo.len == b.repo.len and
+        return a.platform == b.platform and
+            a.repo.len == b.repo.len and
             a.ref.len == b.ref.len and
             std.mem.eql(u8, a.repo, b.repo) and
             std.mem.eql(u8, a.ref, b.ref);
@@ -534,14 +541,69 @@ fn updateChunk(
         }
     }
 
-    var url_parts = std.mem.splitScalar(u8, url_with_line_numbers, '#');
-    const original_url = url_parts.next().?;
-    const line_numbers_str = url_parts.rest();
-    var blob_it = std.mem.splitSequence(u8, original_url, "/blob/");
-    const original_host = blob_it.next().?;
-    const ref_with_path = blob_it.next().?;
-    var path_parts = std.mem.splitScalar(u8, ref_with_path, '/');
-    const ref = path_parts.next().?;
+    if (!std.mem.startsWith(u8, url_with_line_numbers, "https://")) {
+        std.debug.panic("{s}[{d}]: URL must start with https://\n", .{ file_name, start_line_number });
+    }
+    const after_protocol = url_with_line_numbers["https://".len..];
+    const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
+        std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, start_line_number });
+    };
+    const host = after_protocol[0..host_end];
+    const url_path = after_protocol[host_end..];
+
+    const platform: Platform = if (std.mem.eql(u8, host, "github.com"))
+        .github
+    else if (std.mem.eql(u8, host, "gitlab.com"))
+        .gitlab
+    else if (std.mem.eql(u8, host, "codeberg.org"))
+        .codeberg
+    else {
+        std.debug.panic("{s}[{d}]: Unsupported host: {s}\n", .{
+            file_name,
+            start_line_number,
+            host,
+        });
+    };
+
+    var repo: []const u8 = undefined;
+    var ref: []const u8 = undefined;
+    var path_with_query_and_fragment: []const u8 = undefined;
+
+    switch (platform) {
+        .github => {
+            var parts = std.mem.splitScalar(u8, url_path, '/');
+            _ = parts.next();
+            const owner = parts.next().?;
+            const repo_name = parts.next().?;
+            repo = url_path[1 .. 1 + owner.len + 1 + repo_name.len];
+            _ = parts.next().?;
+            ref = parts.next().?;
+            path_with_query_and_fragment = parts.rest();
+        },
+        .gitlab => {
+            const marker = "/-/blob/";
+            const marker_pos = std.mem.indexOf(u8, url_path, marker) orelse {
+                std.debug.panic("{s}[{d}]: GitLab URL must contain /-/blob/\n", .{ file_name, start_line_number });
+            };
+            repo = url_path[1..marker_pos];
+            const after_marker = url_path[marker_pos + marker.len ..];
+            var parts = std.mem.splitScalar(u8, after_marker, '/');
+            ref = parts.next().?;
+            path_with_query_and_fragment = parts.rest();
+        },
+        .codeberg => {
+            const marker = "/src/";
+            const marker_pos = std.mem.indexOf(u8, url_path, marker) orelse {
+                std.debug.panic("{s}[{d}]: Codeberg URL must contain /src/\n", .{ file_name, start_line_number });
+            };
+            repo = url_path[1..marker_pos];
+            const after_marker = url_path[marker_pos + marker.len ..];
+            var parts = std.mem.splitScalar(u8, after_marker, '/');
+            _ = parts.next().?;
+            ref = parts.next().?;
+            path_with_query_and_fragment = parts.rest();
+        },
+    }
 
     if (action == .check_freeze) {
         if (ref.len != 40) {
@@ -569,16 +631,20 @@ fn updateChunk(
         return .untouched;
     }
 
-    const path_with_query = path_parts.rest();
+    var path_and_fragment_parts = std.mem.splitScalar(u8, path_with_query_and_fragment, '#');
+    const path_with_query = path_and_fragment_parts.next().?;
+    const line_numbers_str = path_and_fragment_parts.rest();
     const path_end = std.mem.indexOfScalar(u8, path_with_query, '?') orelse path_with_query.len;
     const path = path_with_query[0..path_end];
-    const repo = original_host["https://github.com/".len..];
     var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
     const base_start_str = line_numbers.next().?["L".len..];
     const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
     var base_end: usize = undefined;
     if (line_numbers.next()) |end_str| {
-        const base_end_str = end_str["L".len..];
+        const base_end_str = switch (platform) {
+            .github, .codeberg => end_str["L".len..],
+            .gitlab => end_str,
+        };
         base_end = try std.fmt.parseInt(usize, base_end_str, 10);
     } else {
         base_end = base_start;
@@ -587,11 +653,12 @@ fn updateChunk(
     const base_sha = if (ref.len == 40)
         ref
     else
-        try fetchLatestCommitSha(allocator, sha_cache, repo, ref);
+        try fetchLatestCommitSha(allocator, sha_cache, platform, repo, ref);
 
     const base_file = try fetchFile(
         allocator,
         temp_dir,
+        platform,
         repo,
         base_sha,
         path,
@@ -624,7 +691,7 @@ fn updateChunk(
     const new_sha = if (action == .get_freeze)
         base_sha
     else
-        try fetchLatestCommitSha(allocator, sha_cache, repo, "HEAD");
+        try fetchLatestCommitSha(allocator, sha_cache, platform, repo, "HEAD");
 
     var new_start: usize = undefined;
     var new_end: usize = undefined;
@@ -650,6 +717,7 @@ fn updateChunk(
         const new_file = try fetchFile(
             allocator,
             temp_dir,
+            platform,
             repo,
             new_sha,
             path,
@@ -852,11 +920,18 @@ fn updateChunk(
     // Write back bytes
 
     const command = if (action == .get_freeze) "freeze" else "track";
-    const updated_url = try std.fmt.allocPrint(
-        allocator,
-        "{s} {s} {s}/blob/{s}/{s}#L{d}-L{d}",
-        .{ prefix, command, original_host, new_sha, path_with_query, new_start, new_end },
-    );
+    const updated_url = switch (platform) {
+        .github, .codeberg => try std.fmt.allocPrint(
+            allocator,
+            "{s} {s} https://{s}/{s}/{s}/{s}/{s}#L{d}-L{d}",
+            .{ prefix, command, host, repo, if (platform == .github) "blob" else "src/commit", new_sha, path_with_query, new_start, new_end },
+        ),
+        .gitlab => try std.fmt.allocPrint(
+            allocator,
+            "{s} {s} https://{s}/{s}/-/blob/{s}/{s}#L{d}-{d}",
+            .{ prefix, command, host, repo, new_sha, path_with_query, new_start, new_end },
+        ),
+    };
     try updated_bytes.appendSlice(allocator, updated_url);
     switch (match.comment) {
         .line => {},
@@ -895,29 +970,44 @@ fn parseRange(range_str: []const u8) !GitRange {
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
     sha_cache: *ShaCache,
+    platform: Platform,
     repo: []const u8,
     ref: []const u8,
 ) ![]const u8 {
-    const cache_key: ShaCacheKey = .{ .repo = repo, .ref = ref };
+    const cache_key: ShaCacheKey = .{ .platform = platform, .repo = repo, .ref = ref };
 
     const gop = try sha_cache.getOrPut(cache_key);
     if (gop.found_existing) {
         return gop.value_ptr.*;
     }
 
-    const api_url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, ref });
+    const api_url = switch (platform) {
+        .github => try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, ref }),
+        .gitlab => blk: {
+            const encoded_repo = try std.mem.replaceOwned(u8, allocator, repo, "/", "%2F");
+            break :blk try std.fmt.allocPrint(allocator, "https://gitlab.com/api/v4/projects/{s}/repository/commits/{s}", .{ encoded_repo, ref });
+        },
+        .codeberg => try std.fmt.allocPrint(allocator, "https://codeberg.org/api/v1/repos/{s}/git/commits/{s}", .{ repo, ref }),
+    };
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
 
     var authorization: std.http.Client.Request.Headers.Value = undefined;
 
-    if (std.process.hasEnvVarConstant("GITHUB_TOKEN")) {
-        const token = try std.process.getEnvVarOwned(allocator, "GITHUB_TOKEN");
-        const auth_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
-        authorization = .{ .override = auth_value };
-    } else {
-        authorization = .default;
+    switch (platform) {
+        .github => {
+            if (std.process.hasEnvVarConstant("GITHUB_TOKEN")) {
+                const token = try std.process.getEnvVarOwned(allocator, "GITHUB_TOKEN");
+                const auth_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+                authorization = .{ .override = auth_value };
+            } else {
+                authorization = .default;
+            }
+        },
+        .gitlab, .codeberg => {
+            authorization = .default;
+        },
     }
 
     const result = try client.fetch(.{
@@ -929,8 +1019,12 @@ fn fetchLatestCommitSha(
     });
 
     if (result.status == .forbidden or result.status == .too_many_requests) {
-        std.debug.print("GitHub API rate limit exceeded. Try again later or authenticate.\n", .{});
-        return error.RateLimited;
+        const platform_name = switch (platform) {
+            .github => "GitHub",
+            .gitlab => "GitLab",
+            .codeberg => "Codeberg",
+        };
+        std.debug.panic("{s} API rate limit exceeded. Try again later or authenticate.\n", .{platform_name});
     }
 
     const json_bytes = try aw.toOwnedSlice();
@@ -939,13 +1033,23 @@ fn fetchLatestCommitSha(
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
     defer parsed.deinit();
 
-    const sha = parsed.value.object.get("sha") orelse {
-        std.debug.print("GitHub API error (status {d}): {s}\n", .{ @intFromEnum(result.status), json_bytes });
-        return error.GitHubApiError;
+    const sha_field_name = switch (platform) {
+        .github, .codeberg => "sha",
+        .gitlab => "id",
+    };
+
+    const sha = parsed.value.object.get(sha_field_name) orelse {
+        const platform_name = switch (platform) {
+            .github => "GitHub",
+            .gitlab => "GitLab",
+            .codeberg => "Codeberg",
+        };
+        std.debug.panic("{s} API error (status {d}): {s}\n", .{ platform_name, @intFromEnum(result.status), json_bytes });
     };
 
     const cache_allocator = sha_cache.allocator;
     gop.key_ptr.* = .{
+        .platform = platform,
         .repo = try cache_allocator.dupe(u8, repo),
         .ref = try cache_allocator.dupe(u8, ref),
     };
@@ -964,6 +1068,7 @@ const File = struct {
 fn fetchFile(
     allocator: std.mem.Allocator,
     temp_dir: *TempDir,
+    platform: Platform,
     repo: []const u8,
     sha: []const u8,
     path: []const u8,
@@ -974,17 +1079,33 @@ fn fetchFile(
         return .{ .name = name, .data = data };
     }
 
-    const url = try std.fmt.allocPrint(
-        allocator,
-        "https://raw.githubusercontent.com/{s}/{s}/{s}",
-        .{ repo, sha, path },
-    );
+    const url = switch (platform) {
+        .github => try std.fmt.allocPrint(
+            allocator,
+            "https://raw.githubusercontent.com/{s}/{s}/{s}",
+            .{ repo, sha, path },
+        ),
+        .gitlab => try std.fmt.allocPrint(
+            allocator,
+            "https://gitlab.com/{s}/-/raw/{s}/{s}",
+            .{ repo, sha, path },
+        ),
+        .codeberg => try std.fmt.allocPrint(
+            allocator,
+            "https://codeberg.org/{s}/raw/commit/{s}/{s}",
+            .{ repo, sha, path },
+        ),
+    };
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     var client = std.http.Client{ .allocator = allocator };
-    _ = try client.fetch(.{
+    const result = try client.fetch(.{
         .location = .{ .url = url },
         .response_writer = &aw.writer,
     });
+
+    if (result.status != .ok) {
+        std.debug.panic("Failed to fetch file from {s}: HTTP {d}\n", .{ url, @intFromEnum(result.status) });
+    }
 
     const data = try aw.toOwnedSlice();
     try temp_dir.dir.writeFile(.{ .sub_path = name, .data = data });
