@@ -12,6 +12,44 @@ const Platform = enum {
     github,
     gitlab,
     codeberg,
+
+    fn parse(host: []const u8) !Platform {
+        if (std.mem.eql(u8, host, "github.com")) return .github;
+        if (std.mem.eql(u8, host, "gitlab.com")) return .gitlab;
+        if (std.mem.eql(u8, host, "codeberg.org")) return .codeberg;
+        return error.UnknownPlatform;
+    }
+};
+
+const PlatformFilter = packed struct {
+    github: bool = true,
+    gitlab: bool = true,
+    codeberg: bool = true,
+
+    const blacklist_default = PlatformFilter{};
+    const whitelist_default = PlatformFilter{ .github = false, .gitlab = false, .codeberg = false };
+
+    fn isEnabled(self: PlatformFilter, platform: Platform) bool {
+        return switch (platform) {
+            inline else => |tag| {
+                return @field(self, @tagName(tag));
+            },
+        };
+    }
+
+    fn setPlatform(self: *PlatformFilter, platform: Platform, enabled: bool) void {
+        switch (platform) {
+            inline else => |tag| {
+                @field(self, @tagName(tag)) = enabled;
+            },
+        }
+    }
+};
+
+const GlobalContext = struct {
+    temp_dir: *TempDir,
+    sha_cache: *ShaCache,
+    platform_filter: PlatformFilter,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -236,8 +274,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
 
 fn recursivelyUpdate(
     arena: *std.heap.ArenaAllocator,
-    temp_dir: *TempDir,
-    sha_cache: *ShaCache,
+    ctx: GlobalContext,
     parent_dir: std.fs.Dir,
     name: []const u8,
     kind: std.fs.File.Kind,
@@ -249,17 +286,16 @@ fn recursivelyUpdate(
         defer dir.close();
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            try recursivelyUpdate(arena, temp_dir, sha_cache, dir, entry.name, entry.kind);
+            try recursivelyUpdate(arena, ctx, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
-        try updateFile(arena, temp_dir, sha_cache, parent_dir, name);
+        try updateFile(arena, ctx, parent_dir, name);
     }
 }
 
 fn updateFile(
     arena: *std.heap.ArenaAllocator,
-    temp_dir: *TempDir,
-    sha_cache: *ShaCache,
+    ctx: GlobalContext,
     dir: std.fs.Dir,
     file_name: []const u8,
 ) !void {
@@ -288,8 +324,7 @@ fn updateFile(
         if (mightMatchTag(line)) {
             switch (try updateChunk(
                 allocator,
-                temp_dir,
-                sha_cache,
+                ctx,
                 file_name,
                 line_number,
                 &updated_bytes,
@@ -459,8 +494,7 @@ const ChunkStatus = enum {
 
 fn updateChunk(
     allocator: std.mem.Allocator,
-    temp_dir: *TempDir,
-    sha_cache: *ShaCache,
+    ctx: GlobalContext,
     file_name: []const u8,
     start_line_number: usize,
     updated_bytes: *std.ArrayList(u8),
@@ -551,13 +585,7 @@ fn updateChunk(
     const host = after_protocol[0..host_end];
     const url_path = after_protocol[host_end + 1 ..]; // strip leading '/'
 
-    const platform: Platform = if (std.mem.eql(u8, host, "github.com"))
-        .github
-    else if (std.mem.eql(u8, host, "gitlab.com"))
-        .gitlab
-    else if (std.mem.eql(u8, host, "codeberg.org"))
-        .codeberg
-    else {
+    const platform = Platform.parse(host) catch {
         std.debug.panic("{s}[{d}]: Unsupported host: {s}\n", .{
             file_name,
             start_line_number,
@@ -580,28 +608,33 @@ fn updateChunk(
     const ref = parts.next().?;
     const path_with_query_and_fragment = parts.rest();
 
-    if (action == .check_freeze) {
-        if (ref.len != 40) {
+    if (!ctx.platform_filter.isEnabled(platform) or action == .check_freeze) {
+        if (ctx.platform_filter.isEnabled(platform) and ref.len != 40) {
             std.debug.panic(
                 "{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n",
                 .{ file_name, start_line_number },
             );
         }
 
-        const current_start = current_line.ptr - lines.buffer.ptr;
-        const end_line = skipToEndLine(
-            lines,
-            indent,
-            file_type_info,
-            file_name,
-            start_line_number,
-        );
-        const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
-        try updated_bytes.appendSlice(
-            allocator,
-            lines.buffer[current_start..current_end],
-        );
-        try maybeAppendNewline(allocator, updated_bytes, lines);
+        if (action == .track or action == .check_freeze) {
+            const current_start = current_line.ptr - lines.buffer.ptr;
+            const end_line = skipToEndLine(
+                lines,
+                indent,
+                file_type_info,
+                file_name,
+                start_line_number,
+            );
+            const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
+            try updated_bytes.appendSlice(
+                allocator,
+                lines.buffer[current_start..current_end],
+            );
+            try maybeAppendNewline(allocator, updated_bytes, lines);
+        } else {
+            try updated_bytes.appendSlice(allocator, current_line);
+            try maybeAppendNewline(allocator, updated_bytes, lines);
+        }
 
         return .untouched;
     }
@@ -630,11 +663,11 @@ fn updateChunk(
     const base_sha = if (ref.len == 40)
         ref
     else
-        try fetchLatestCommitSha(allocator, sha_cache, platform, repo, ref);
+        try fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, ref);
 
     const base_file = try fetchFile(
         allocator,
-        temp_dir,
+        ctx.temp_dir,
         platform,
         repo,
         base_sha,
@@ -668,7 +701,7 @@ fn updateChunk(
     const new_sha = if (action == .get_freeze)
         base_sha
     else
-        try fetchLatestCommitSha(allocator, sha_cache, platform, repo, "HEAD");
+        try fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, "HEAD");
 
     var new_start: usize = undefined;
     var new_end: usize = undefined;
@@ -693,7 +726,7 @@ fn updateChunk(
         std.debug.assert(action == .track or (action == .get and ref.len == 40));
         const new_file = try fetchFile(
             allocator,
-            temp_dir,
+            ctx.temp_dir,
             platform,
             repo,
             new_sha,
@@ -704,8 +737,8 @@ fn updateChunk(
 
         var base_file_path_buffer: [1024]u8 = undefined;
         var new_file_path_buffer: [1024]u8 = undefined;
-        const base_file_path = try temp_dir.dir.realpath(base_file.name, &base_file_path_buffer);
-        const new_file_path = try temp_dir.dir.realpath(new_file.name, &new_file_path_buffer);
+        const base_file_path = try ctx.temp_dir.dir.realpath(base_file.name, &base_file_path_buffer);
+        const new_file_path = try ctx.temp_dir.dir.realpath(new_file.name, &new_file_path_buffer);
 
         const diff_result = try std.process.Child.run(.{
             .allocator = allocator,
@@ -813,12 +846,12 @@ fn updateChunk(
             file_type_info,
         );
 
-        try temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
-        try temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
+        try ctx.temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
+        try ctx.temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
         var base_chunk_path_buffer: [1024]u8 = undefined;
         var new_chunk_path_buffer: [1024]u8 = undefined;
-        const base_chunk_path = try temp_dir.dir.realpath("base", &base_chunk_path_buffer);
-        const new_chunk_path = try temp_dir.dir.realpath("new", &new_chunk_path_buffer);
+        const base_chunk_path = try ctx.temp_dir.dir.realpath("base", &base_chunk_path_buffer);
+        const new_chunk_path = try ctx.temp_dir.dir.realpath("new", &new_chunk_path_buffer);
 
         // Determine updated chunk bytes
 
@@ -826,9 +859,9 @@ fn updateChunk(
             updated_chunk = new_indented.items;
         } else {
             std.debug.assert(action == .track);
-            try temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
+            try ctx.temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
-            const current_chunk_path = try temp_dir.dir.realpath(
+            const current_chunk_path = try ctx.temp_dir.dir.realpath(
                 "current",
                 &current_chunk_path_buffer,
             );
@@ -1451,13 +1484,43 @@ pub fn main() !void {
     defer arg_it.deinit();
     _ = arg_it.next();
 
+    var blacklist = PlatformFilter.blacklist_default;
+    var whitelist = PlatformFilter.whitelist_default;
+    var current_filter: *PlatformFilter = &blacklist;
     var name: []const u8 = ".";
     var kind: std.fs.File.Kind = .directory;
-    if (arg_it.next()) |path| {
-        name = path;
-        const stat = try std.fs.cwd().statFile(path);
-        kind = stat.kind;
+
+    while (arg_it.next()) |arg| {
+        const is_platform = std.mem.startsWith(u8, arg, "--platform");
+        const is_no_platform = !is_platform and std.mem.startsWith(u8, arg, "--no-platform");
+
+        if (is_platform or is_no_platform) {
+            const enable = is_platform;
+            if (enable) current_filter = &whitelist;
+
+            const host = if (std.mem.indexOf(u8, arg, "=")) |eq_idx|
+                arg[eq_idx + 1 ..]
+            else
+                arg_it.next() orelse
+                    std.debug.panic("{s} requires a value\n", .{arg});
+
+            const platform = Platform.parse(host) catch {
+                std.debug.panic("Unknown platform: {s}\n", .{host});
+            };
+            current_filter.setPlatform(platform, enable);
+        } else {
+            name = arg;
+            const stat = try std.fs.cwd().statFile(arg);
+            kind = stat.kind;
+            break;
+        }
     }
 
-    try recursivelyUpdate(&arena, &temp_dir, &sha_cache, std.fs.cwd(), name, kind);
+    const ctx = GlobalContext{
+        .temp_dir = &temp_dir,
+        .sha_cache = &sha_cache,
+        .platform_filter = current_filter.*,
+    };
+
+    try recursivelyUpdate(&arena, ctx, std.fs.cwd(), name, kind);
 }
