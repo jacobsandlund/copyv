@@ -5,7 +5,7 @@ Version control for copy paste! `copyv` will keep copy-pasted code up to date wi
 ## Installation
 
 ```sh
-git clone git@github.com:jacobsandlund/copyv.git
+git clone git@github.com:jacobsandlund/copyv.git # or use https
 cd copyv
 zig build -Doptimize=ReleaseFast
 cp zig-out/bin/copyv ~/.local/bin # or somewhere on your PATH
