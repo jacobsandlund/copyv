@@ -549,7 +549,7 @@ fn updateChunk(
         std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, start_line_number });
     };
     const host = after_protocol[0..host_end];
-    const url_path = after_protocol[host_end..];
+    const url_path = after_protocol[host_end + 1 ..]; // strip leading '/'
 
     const platform: Platform = if (std.mem.eql(u8, host, "github.com"))
         .github
@@ -565,45 +565,20 @@ fn updateChunk(
         });
     };
 
-    var repo: []const u8 = undefined;
-    var ref: []const u8 = undefined;
-    var path_with_query_and_fragment: []const u8 = undefined;
-
-    switch (platform) {
-        .github => {
-            var parts = std.mem.splitScalar(u8, url_path, '/');
-            _ = parts.next();
-            const owner = parts.next().?;
-            const repo_name = parts.next().?;
-            repo = url_path[1 .. 1 + owner.len + 1 + repo_name.len];
-            _ = parts.next().?;
-            ref = parts.next().?;
-            path_with_query_and_fragment = parts.rest();
-        },
-        .gitlab => {
-            const marker = "/-/blob/";
-            const marker_pos = std.mem.indexOf(u8, url_path, marker) orelse {
-                std.debug.panic("{s}[{d}]: GitLab URL must contain /-/blob/\n", .{ file_name, start_line_number });
-            };
-            repo = url_path[1..marker_pos];
-            const after_marker = url_path[marker_pos + marker.len ..];
-            var parts = std.mem.splitScalar(u8, after_marker, '/');
-            ref = parts.next().?;
-            path_with_query_and_fragment = parts.rest();
-        },
-        .codeberg => {
-            const marker = "/src/";
-            const marker_pos = std.mem.indexOf(u8, url_path, marker) orelse {
-                std.debug.panic("{s}[{d}]: Codeberg URL must contain /src/\n", .{ file_name, start_line_number });
-            };
-            repo = url_path[1..marker_pos];
-            const after_marker = url_path[marker_pos + marker.len ..];
-            var parts = std.mem.splitScalar(u8, after_marker, '/');
-            _ = parts.next().?;
-            ref = parts.next().?;
-            path_with_query_and_fragment = parts.rest();
-        },
-    }
+    const marker = switch (platform) {
+        .github => "/blob/",
+        .gitlab => "/-/blob/",
+        .codeberg => "/src/",
+    };
+    const marker_index = std.mem.indexOf(u8, url_path, marker) orelse {
+        std.debug.panic("{s}[{d}]: URL must contain {s}\n", .{ file_name, start_line_number, marker });
+    };
+    const repo = url_path[0..marker_index];
+    const after_marker = url_path[marker_index + marker.len ..];
+    var parts = std.mem.splitScalar(u8, after_marker, '/');
+    if (platform == .codeberg) _ = parts.next().?; // skip mode (e.g. "commit")
+    const ref = parts.next().?;
+    const path_with_query_and_fragment = parts.rest();
 
     if (action == .check_freeze) {
         if (ref.len != 40) {
@@ -631,13 +606,15 @@ fn updateChunk(
         return .untouched;
     }
 
-    var path_and_fragment_parts = std.mem.splitScalar(u8, path_with_query_and_fragment, '#');
-    const path_with_query = path_and_fragment_parts.next().?;
-    const line_numbers_str = path_and_fragment_parts.rest();
+    const fragment_index = std.mem.indexOfScalar(u8, path_with_query_and_fragment, '#') orelse {
+        std.debug.panic("{s}[{d}]: URL must contain line numbers fragment #L...\n", .{ file_name, start_line_number });
+    };
+    const path_with_query = path_with_query_and_fragment[0..fragment_index];
+    const line_numbers_str = path_with_query_and_fragment[fragment_index + 1 ..];
     const path_end = std.mem.indexOfScalar(u8, path_with_query, '?') orelse path_with_query.len;
     const path = path_with_query[0..path_end];
     var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
-    const base_start_str = line_numbers.next().?["L".len..];
+    const base_start_str = line_numbers.first()["L".len..];
     const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
     var base_end: usize = undefined;
     if (line_numbers.next()) |end_str| {
@@ -924,12 +901,31 @@ fn updateChunk(
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
             "{s} {s} https://{s}/{s}/{s}/{s}/{s}#L{d}-L{d}",
-            .{ prefix, command, host, repo, if (platform == .github) "blob" else "src/commit", new_sha, path_with_query, new_start, new_end },
+            .{
+                prefix,
+                command,
+                host,
+                repo,
+                if (platform == .github) "blob" else "src/commit",
+                new_sha,
+                path_with_query,
+                new_start,
+                new_end,
+            },
         ),
         .gitlab => try std.fmt.allocPrint(
             allocator,
             "{s} {s} https://{s}/{s}/-/blob/{s}/{s}#L{d}-{d}",
-            .{ prefix, command, host, repo, new_sha, path_with_query, new_start, new_end },
+            .{
+                prefix,
+                command,
+                host,
+                repo,
+                new_sha,
+                path_with_query,
+                new_start,
+                new_end,
+            },
         ),
     };
     try updated_bytes.appendSlice(allocator, updated_url);
