@@ -47,6 +47,7 @@ const PlatformFilter = packed struct {
 };
 
 const GlobalContext = struct {
+    arena: *std.heap.ArenaAllocator,
     temp_dir: *TempDir,
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
@@ -273,7 +274,6 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
 });
 
 fn recursivelyUpdate(
-    arena: *std.heap.ArenaAllocator,
     ctx: GlobalContext,
     parent_dir: std.fs.Dir,
     name: []const u8,
@@ -286,15 +286,14 @@ fn recursivelyUpdate(
         defer dir.close();
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            try recursivelyUpdate(arena, ctx, dir, entry.name, entry.kind);
+            try recursivelyUpdate(ctx, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
-        try updateFile(arena, ctx, parent_dir, name);
+        try updateFile(ctx, parent_dir, name);
     }
 }
 
 fn updateFile(
-    arena: *std.heap.ArenaAllocator,
     ctx: GlobalContext,
     dir: std.fs.Dir,
     file_name: []const u8,
@@ -303,8 +302,8 @@ fn updateFile(
     const file_type_info = file_type_info_map.get(ext) orelse
         file_type_info_map.get(file_name) orelse return;
 
-    const allocator = arena.allocator();
-    defer _ = arena.reset(.{ .retain_with_limit = 1024 * 1024 });
+    const allocator = ctx.arena.allocator();
+    defer _ = ctx.arena.reset(.{ .retain_with_limit = 1024 * 1024 });
     var file = try dir.openFile(file_name, .{});
     errdefer file.close(); // also closed below
     var buf: [4096]u8 = undefined;
@@ -1517,10 +1516,11 @@ pub fn main() !void {
     }
 
     const ctx = GlobalContext{
+        .arena = &arena,
         .temp_dir = &temp_dir,
         .sha_cache = &sha_cache,
         .platform_filter = current_filter.*,
     };
 
-    try recursivelyUpdate(&arena, ctx, std.fs.cwd(), name, kind);
+    try recursivelyUpdate(ctx, std.fs.cwd(), name, kind);
 }
