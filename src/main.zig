@@ -298,6 +298,7 @@ fn updateFile(
     dir: std.fs.Dir,
     file_name: []const u8,
 ) !void {
+    std.log.debug("Updating file: {s}", .{file_name});
     const ext = std.fs.path.extension(file_name);
     const file_type_info = file_type_info_map.get(ext) orelse
         file_type_info_map.get(file_name) orelse return;
