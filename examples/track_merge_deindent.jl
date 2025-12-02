@@ -1,4 +1,4 @@
-# copyv: track https://github.com/JuliaStrings/utf8proc/blob/1fe43f5a6d9c628f717c5ec8aeaeae4a9adfd167/data/data_generator.jl#L202-L244
+# cpv: track https://github.com/JuliaStrings/utf8proc/blob/1fe43f5a6d9c628f717c5ec8aeaeae4a9adfd167/data/data_generator.jl#L202-L244
 # Following work by @jiahao, we compute character widths using a combination of
 #   * character category
 #   * UAX 11: East Asian Width
@@ -43,4 +43,4 @@ global function derive_char_width(code, category)
 
     return width
 end
-# copyv: end
+# cpv: end

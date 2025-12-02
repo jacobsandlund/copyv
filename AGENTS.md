@@ -4,7 +4,7 @@ Version control for copy paste!
 
 ## Project Overview
 
-`src/main.zig` contains all the code for this small executable. It finds all `copyv:` tags and updates the copied code from changes made to the source, even allowing merges.
+`src/main.zig` contains all the code for this small executable. It finds all `cpv:` tags and updates the copied code from changes made to the source, even allowing merges.
 
 ## Build & Commands
 

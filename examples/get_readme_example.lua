@@ -1,1 +1,1 @@
--- copyv: https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L138-L142
+-- cpv: https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L138-L142

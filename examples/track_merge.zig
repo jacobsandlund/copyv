@@ -1,10 +1,10 @@
-// copyv: track https://github.com/ghostty-org/ghostty/blob/26e9b0a0f3b07149c7fd7474519eba6b21f8c5fd/src/benchmark/CodepointWidth.zig#L134-L165
+// cpv: track https://github.com/ghostty-org/ghostty/blob/26e9b0a0f3b07149c7fd7474519eba6b21f8c5fd/src/benchmark/CodepointWidth.zig#L134-L165
 fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));
 
     // I've added a comment here, this should stay.
     // But I added this comment later, and it'll cause conflicts in
-    // track_with_nested_copyv.zig
+    // track_with_nested_cpv.zig
     const f = self.data_f orelse return;
     var r = std.io.bufferedReader(f.reader());
     var d: UTF8Decoder = .{};
@@ -34,4 +34,4 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
         }
     }
 }
-// copyv: end
+// cpv: end

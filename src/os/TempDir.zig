@@ -1,10 +1,9 @@
-//! copyv: track https://github.com/ghostty-org/ghostty/blob/05b580911577ae86e7a29146fac29fb368eab536/src/os/TempDir.zig#L1-L96
+//! cpv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/TempDir.zig#L1-L95
 //! Creates a temporary directory at runtime that can be safely used to
 //! store temporary data and is destroyed on deinit.
 const TempDir = @This();
 
 const std = @import("std");
-const builtin = @import("builtin");
 const testing = std.testing;
 const Dir = std.fs.Dir;
 const allocTmpDir = @import("file.zig").allocTmpDir;
@@ -95,4 +94,4 @@ test {
     td.deinit();
     try testing.expectError(error.FileNotFound, td.parent.openDir(nameval, .{}));
 }
-// copyv: end
+// cpv: end
