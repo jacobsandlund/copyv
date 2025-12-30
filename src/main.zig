@@ -141,6 +141,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".xhtml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".xml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".xaml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".x", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".svg", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".css", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "/*", .end = "*/" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".scss", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
