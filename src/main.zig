@@ -245,6 +245,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".gql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".graphql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".erl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ ".yrl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%%" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".hrl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".ex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".exs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
