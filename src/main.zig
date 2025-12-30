@@ -544,7 +544,7 @@ fn updateChunk(
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.eql(u8, first_arg, "end")) {
         std.debug.panic(
-            "{s}[{d}]: Unexpected 'copyv: end' outside of a copvy chunk\n",
+            "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
             .{ file_name, start_line_number },
         );
     } else { // get
