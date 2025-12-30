@@ -1,5 +1,4 @@
 const std = @import("std");
-const TempDir = @import("os/TempDir.zig");
 
 const Action = enum {
     track,
@@ -48,7 +47,7 @@ const PlatformFilter = packed struct {
 
 const GlobalContext = struct {
     arena: *std.heap.ArenaAllocator,
-    temp_dir: *TempDir,
+    cache_dir: std.fs.Dir,
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
 };
@@ -669,7 +668,7 @@ fn updateChunk(
 
     const base_file = try fetchFile(
         allocator,
-        ctx.temp_dir,
+        ctx.cache_dir,
         platform,
         repo,
         base_sha,
@@ -728,7 +727,7 @@ fn updateChunk(
         std.debug.assert(action == .track or (action == .get and ref.len == 40));
         const new_file = try fetchFile(
             allocator,
-            ctx.temp_dir,
+            ctx.cache_dir,
             platform,
             repo,
             new_sha,
@@ -739,8 +738,8 @@ fn updateChunk(
 
         var base_file_path_buffer: [1024]u8 = undefined;
         var new_file_path_buffer: [1024]u8 = undefined;
-        const base_file_path = try ctx.temp_dir.dir.realpath(base_file.name, &base_file_path_buffer);
-        const new_file_path = try ctx.temp_dir.dir.realpath(new_file.name, &new_file_path_buffer);
+        const base_file_path = try ctx.cache_dir.realpath(base_file.name, &base_file_path_buffer);
+        const new_file_path = try ctx.cache_dir.realpath(new_file.name, &new_file_path_buffer);
 
         const diff_result = try std.process.Child.run(.{
             .allocator = allocator,
@@ -848,12 +847,12 @@ fn updateChunk(
             file_type_info,
         );
 
-        try ctx.temp_dir.dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
-        try ctx.temp_dir.dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
+        try ctx.cache_dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
+        try ctx.cache_dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
         var base_chunk_path_buffer: [1024]u8 = undefined;
         var new_chunk_path_buffer: [1024]u8 = undefined;
-        const base_chunk_path = try ctx.temp_dir.dir.realpath("base", &base_chunk_path_buffer);
-        const new_chunk_path = try ctx.temp_dir.dir.realpath("new", &new_chunk_path_buffer);
+        const base_chunk_path = try ctx.cache_dir.realpath("base", &base_chunk_path_buffer);
+        const new_chunk_path = try ctx.cache_dir.realpath("new", &new_chunk_path_buffer);
 
         // Determine updated chunk bytes
 
@@ -861,9 +860,9 @@ fn updateChunk(
             updated_chunk = new_indented.items;
         } else {
             std.debug.assert(action == .track);
-            try ctx.temp_dir.dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
+            try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
-            const current_chunk_path = try ctx.temp_dir.dir.realpath(
+            const current_chunk_path = try ctx.cache_dir.realpath(
                 "current",
                 &current_chunk_path_buffer,
             );
@@ -1098,7 +1097,7 @@ const File = struct {
 
 fn fetchFile(
     allocator: std.mem.Allocator,
-    temp_dir: *TempDir,
+    cache_dir: std.fs.Dir,
     platform: Platform,
     repo: []const u8,
     sha: []const u8,
@@ -1106,7 +1105,7 @@ fn fetchFile(
 ) !File {
     const safe_path = try std.mem.replaceOwned(u8, allocator, path, "/", "_");
     const name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ sha, safe_path });
-    if (temp_dir.dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
+    if (cache_dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
         return .{ .name = name, .data = data };
     }
 
@@ -1139,7 +1138,7 @@ fn fetchFile(
     }
 
     const data = try aw.toOwnedSlice();
-    try temp_dir.dir.writeFile(.{ .sub_path = name, .data = data });
+    try cache_dir.writeFile(.{ .sub_path = name, .data = data });
     return .{ .name = name, .data = data };
 }
 
@@ -1474,8 +1473,9 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var temp_dir = try TempDir.init();
-    defer temp_dir.deinit();
+    const cwd = std.fs.cwd();
+    try cwd.makePath(".copyv/cache");
+    const cache_dir = try cwd.openDir(".copyv/cache", .{});
 
     const allocator = arena.allocator();
 
@@ -1520,7 +1520,7 @@ pub fn main() !void {
 
     const ctx = GlobalContext{
         .arena = &arena,
-        .temp_dir = &temp_dir,
+        .cache_dir = cache_dir,
         .sha_cache = &sha_cache,
         .platform_filter = current_filter.*,
     };
