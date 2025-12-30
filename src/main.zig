@@ -377,10 +377,10 @@ fn maybeAppendNewline(
     }
 }
 
-const cpv_tag = "cpv:";
+const copyv_tag = "copyv:";
 
 fn mightMatchTag(line: []const u8) bool {
-    return std.mem.indexOf(u8, line, cpv_tag) != null;
+    return std.mem.indexOf(u8, line, copyv_tag) != null;
 }
 
 const Match = struct {
@@ -415,10 +415,10 @@ fn matchesTag(
         if (std.mem.startsWith(u8, line_trimmed, comment_prefix)) {
             const tag = line_trimmed[comment_prefix.len..];
             const tag_trimmed = std.mem.trimStart(u8, tag, line_whitespace);
-            if (std.mem.startsWith(u8, tag_trimmed, cpv_tag)) {
+            if (std.mem.startsWith(u8, tag_trimmed, copyv_tag)) {
                 const comment_start = line.len - line_trimmed.len;
                 const tag_whitespace = tag.len - tag_trimmed.len;
-                const prefix_len = comment_start + comment_prefix.len + tag_whitespace + cpv_tag.len;
+                const prefix_len = comment_start + comment_prefix.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
                 const file_indent = lazy_file_indent.* orelse blk: {
                     const indent = getIndent(file_bytes, file_type_info);
@@ -475,11 +475,11 @@ fn appendEndTag(
     switch (file_type_info.comments[0]) {
         .line => |prefix| {
             try updated_bytes.appendSlice(allocator, prefix);
-            try updated_bytes.appendSlice(allocator, " cpv: end");
+            try updated_bytes.appendSlice(allocator, " copyv: end");
         },
         .paired => |p| {
             try updated_bytes.appendSlice(allocator, p.begin);
-            try updated_bytes.appendSlice(allocator, " cpv: end ");
+            try updated_bytes.appendSlice(allocator, " copyv: end ");
             try updated_bytes.appendSlice(allocator, p.end);
         },
     }
@@ -544,7 +544,7 @@ fn updateChunk(
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.eql(u8, first_arg, "end")) {
         std.debug.panic(
-            "{s}[{d}]: Unexpected 'cpv: end' outside of a cpv chunk\n",
+            "{s}[{d}]: Unexpected 'copyv: end' outside of a copvy chunk\n",
             .{ file_name, start_line_number },
         );
     } else { // get
@@ -611,7 +611,7 @@ fn updateChunk(
     if (!ctx.platform_filter.isEnabled(platform) or action == .check_freeze) {
         if (ctx.platform_filter.isEnabled(platform) and ref.len != 40) {
             std.debug.panic(
-                "{s}[{d}]: 'cpv: freeze' line must point to a commit SHA\n",
+                "{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n",
                 .{ file_name, start_line_number },
             );
         }
@@ -1193,7 +1193,7 @@ fn skipToEndLine(
         }
     } else {
         std.debug.panic(
-            "{s}[{d}]: Expected cpv: end, but instead reached end of file\n",
+            "{s}[{d}]: Expected copyv: end, but instead reached end of file\n",
             .{
                 file_name,
                 line_number,

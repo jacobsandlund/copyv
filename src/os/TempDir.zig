@@ -1,4 +1,4 @@
-//! cpv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/TempDir.zig#L1-L95
+//! copyv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/TempDir.zig#L1-L95
 //! Creates a temporary directory at runtime that can be safely used to
 //! store temporary data and is destroyed on deinit.
 const TempDir = @This();
@@ -94,4 +94,4 @@ test {
     td.deinit();
     try testing.expectError(error.FileNotFound, td.parent.openDir(nameval, .{}));
 }
-// cpv: end
+// copyv: end

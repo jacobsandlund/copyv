@@ -1,12 +1,12 @@
-// cpv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/file.zig#L1-L5
+// copyv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/file.zig#L1-L5
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 
 const log = std.log.scoped(.os);
-// cpv: end
+// copyv: end
 
-/// cpv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/file.zig#L56-L79
+/// copyv: track https://github.com/ghostty-org/ghostty/blob/5714ed07a1012573261b7b7e3ed2add9c1504496/src/os/file.zig#L56-L79
 /// Return the recommended path for temporary files.
 /// This may not actually allocate memory, use freeTmpDir to properly
 /// free the memory when applicable.
@@ -31,4 +31,4 @@ pub fn freeTmpDir(allocator: std.mem.Allocator, dir: []const u8) void {
         allocator.free(dir);
     }
 }
-// cpv: end
+// copyv: end

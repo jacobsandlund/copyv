@@ -1,4 +1,4 @@
-# cpv: track https://github.com/jquast/wcwidth/blob/915166f9453098a56e87a7fb69e697696cefe206/wcwidth/wcwidth.py#L103-L203
+# copyv: track https://github.com/jquast/wcwidth/blob/915166f9453098a56e87a7fb69e697696cefe206/wcwidth/wcwidth.py#L103-L203
 @lru_cache(maxsize=1000)
 def wcwidth(wc, unicode_version='auto'):
     r"""
@@ -100,6 +100,6 @@ def wcswidth(pwcs, n=None, unicode_version='auto'):
         width += wcw
         idx += 1
     return width
-# cpv: end
+# copyv: end
 
-# cpv: https://github.com/jquast/wcwidth/blob/master/bin/update-tables.py#L122-L160
+# copyv: https://github.com/jquast/wcwidth/blob/master/bin/update-tables.py#L122-L160
