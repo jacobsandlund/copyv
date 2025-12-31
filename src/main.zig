@@ -1476,8 +1476,24 @@ pub fn main() !void {
     defer arena.deinit();
 
     const cwd = std.fs.cwd();
-    try cwd.makePath(".copyv/cache");
-    const cache_dir = try cwd.openDir(".copyv/cache", .{});
+
+    // Find repo root by walking up parent directories looking for .git
+    var repo_root = cwd;
+    var search_dir = cwd;
+    while (true) {
+        if (search_dir.statFile(".git")) |_| {
+            repo_root = search_dir;
+            break;
+        } else |_| {}
+        search_dir = search_dir.openDir("..", .{}) catch break;
+    }
+
+    const cache_dir_name = ".copyv-cache";
+    repo_root.makeDir(cache_dir_name) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const cache_dir = try repo_root.openDir(cache_dir_name, .{});
 
     const allocator = arena.allocator();
 
