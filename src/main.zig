@@ -1105,7 +1105,7 @@ fn fetchFile(
     sha: []const u8,
     path: []const u8,
 ) !File {
-    const name = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ sha[0..1], sha[1..], path });
+    const name = try std.fmt.allocPrint(allocator, "files/{s}/{s}/{s}/{s}", .{ repo, path, sha[0..1], sha[1..] });
     if (cache_dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
         return .{ .name = name, .data = data };
     }
