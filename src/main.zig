@@ -1105,8 +1105,7 @@ fn fetchFile(
     sha: []const u8,
     path: []const u8,
 ) !File {
-    const safe_path = try std.mem.replaceOwned(u8, allocator, path, "/", "_");
-    const name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ sha, safe_path });
+    const name = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ sha[0..1], sha[1..], path });
     if (cache_dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
         return .{ .name = name, .data = data };
     }
@@ -1140,6 +1139,9 @@ fn fetchFile(
     }
 
     const data = try aw.toOwnedSlice();
+    if (std.fs.path.dirnamePosix(name)) |dir| {
+        try cache_dir.makePath(dir);
+    }
     try cache_dir.writeFile(.{ .sub_path = name, .data = data });
     return .{ .name = name, .data = data };
 }
