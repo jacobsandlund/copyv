@@ -1,4 +1,4 @@
-# copyv: begin https://github.com/jquast/wcwidth/blob/915166f9453098a56e87a7fb69e697696cefe206/wcwidth/wcwidth.py#L103-L203
+# copyv: https://github.com/jquast/wcwidth/blob/915166f9453098a56e87a7fb69e697696cefe206/wcwidth/wcwidth.py#L103-L203 begin
 @lru_cache(maxsize=1000)
 def wcwidth(wc, unicode_version='auto'):
     r"""

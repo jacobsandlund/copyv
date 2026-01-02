@@ -536,52 +536,48 @@ fn updateChunk(
     }
     const line_payload = std.mem.trim(u8, line_remainder, line_whitespace);
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
-    const first_arg = line_args.first();
+    const url_with_line_numbers = line_args.first();
     var action: Action = undefined;
-    var url_with_line_numbers: []const u8 = undefined;
 
-    if (std.mem.eql(u8, first_arg, "begin")) {
-        action = .track;
-        url_with_line_numbers = line_args.rest();
-    } else if (std.mem.eql(u8, first_arg, "freeze")) {
-        action = .check_freeze;
-        url_with_line_numbers = line_args.rest();
-    } else if (std.mem.eql(u8, first_arg, "end")) {
+    if (std.mem.eql(u8, url_with_line_numbers, "end")) {
         std.debug.panic(
             "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
             .{ file_name, line_number.* },
         );
-    } else { // get
-        if (std.mem.startsWith(u8, first_arg, "g")) { // get
+    } else if (!std.mem.startsWith(u8, url_with_line_numbers, "https://")) {
+        std.debug.panic(
+            "{s}[{d}]: Expected a URL beginning with https:// after 'copyv:'",
+            .{ file_name, line_number.* },
+        );
+    }
+
+    const second_arg = line_args.next();
+    if (second_arg) |command| {
+        if (std.mem.eql(u8, command, "begin")) {
+            action = .track;
+        } else if (std.mem.eql(u8, command, "freeze")) {
+            action = .check_freeze;
+        } else if (std.mem.startsWith(u8, command, "gf")) { // get freeze
+            action = .get_freeze;
+        } else if (std.mem.startsWith(u8, command, "g")) { // get
             if (line_args.peek()) |peek| {
-                if (std.mem.startsWith(u8, peek, "fr")) { // freeze
+                if (std.mem.startsWith(u8, peek, "f")) { // freeze
                     action = .get_freeze;
-                    _ = line_args.next(); // skip fr[eeze]
                 } else {
                     action = .get;
                 }
-            } else {
-                std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{
-                    file_name,
-                    line_number.*,
-                });
             }
-            url_with_line_numbers = line_args.rest();
-        } else if (std.mem.startsWith(u8, first_arg, "http")) {
-            action = .get;
-            url_with_line_numbers = first_arg;
         } else {
-            std.debug.panic("{s}[{d}]: Unknown action: {s}\n", .{
+            std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
                 file_name,
                 line_number.*,
-                first_arg,
+                command,
             });
         }
+    } else {
+        action = .get;
     }
 
-    if (!std.mem.startsWith(u8, url_with_line_numbers, "https://")) {
-        std.debug.panic("{s}[{d}]: URL must start with https://\n", .{ file_name, line_number.* });
-    }
     const after_protocol = url_with_line_numbers["https://".len..];
     const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
         std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, line_number.* });
@@ -937,10 +933,9 @@ fn updateChunk(
     const updated_url = switch (platform) {
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
-            "{s} {s} https://{s}/{s}/{s}/{s}/{s}#L{d}-L{d}",
+            "{s} https://{s}/{s}/{s}/{s}/{s}#L{d}-L{d} {s}",
             .{
                 prefix,
-                command,
                 host,
                 repo,
                 if (platform == .github) "blob" else "src/commit",
@@ -948,20 +943,21 @@ fn updateChunk(
                 path_with_query,
                 new_start,
                 new_end,
+                command,
             },
         ),
         .gitlab => try std.fmt.allocPrint(
             allocator,
-            "{s} {s} https://{s}/{s}/-/blob/{s}/{s}#L{d}-{d}",
+            "{s} https://{s}/{s}/-/blob/{s}/{s}#L{d}-{d} {s}",
             .{
                 prefix,
-                command,
                 host,
                 repo,
                 new_sha,
                 path_with_query,
                 new_start,
                 new_end,
+                command,
             },
         ),
     };
@@ -1193,10 +1189,17 @@ fn skipToEndLine(
 
             nesting -= 1;
         } else if (std.mem.startsWith(u8, first_arg, "fr") or // "freeze"
-            std.mem.startsWith(u8, first_arg, "tr") or // TODO: delete "track"
+            std.mem.startsWith(u8, first_arg, "tr") or // "track"
             std.mem.startsWith(u8, first_arg, "be") // "begin"
         ) {
+            // TODO: delete this branch
             nesting += 1;
+        } else if (line_args.next()) |command| {
+            if (std.mem.eql(u8, command, "begin") or
+                std.mem.eql(u8, command, "freeze"))
+            {
+                nesting += 1;
+            }
         }
     } else {
         std.debug.panic(

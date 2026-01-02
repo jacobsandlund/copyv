@@ -2,4 +2,4 @@
 
 This file tests paired comments like `<!-- -->`.
 
-<!-- copyv: get https://github.com/jacobsandlund/copyv/blob/main/README.md#L1-L3 -->
+<!-- copyv: https://github.com/jacobsandlund/copyv/blob/main/README.md#L1-L3-->
