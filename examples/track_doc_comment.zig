@@ -1,4 +1,4 @@
-//! copyv: begin https://github.com/jacobsandlund/copyv/blob/2f4876599e70096b336836834a1f7b98c742a2d4/examples/track_merge.zig#L1-L35
+//! copyv: begin https://github.com/jacobsandlund/copyv/blob/37c8cb575fbfbfc10bd579018124c933ff3242de/examples/track_merge.zig#L1-L35
 // copyv: track https://github.com/ghostty-org/ghostty/blob/26e9b0a0f3b07149c7fd7474519eba6b21f8c5fd/src/benchmark/CodepointWidth.zig#L134-L165
 fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));
