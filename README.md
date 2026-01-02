@@ -33,7 +33,7 @@ $ copyv ~/.config/nvim/init.lua
 Your file now contains:
 
 ```lua
--- copyv: track https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L157-L161
+-- copyv: begin https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L157-L161
 local builtin = require('telescope.builtin')
 vim.keymap.set('n', 'ff', builtin.find_files, {})
 vim.keymap.set('n', 'fg', builtin.live_grep, {})
@@ -51,8 +51,8 @@ $ copyv
 This merges in all the changes up to the latest, including [commit `286628d`](https://github.com/nvim-telescope/telescope.nvim/commit/286628d9f2056cc71d3f3871b5ca4f3209de0dbf) which adds a missing `<leader>`, and updates the SHA:
 
 ```diff
---- copyv: track https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L138-L142
-+-- copyv: track https://github.com/nvim-telescope/telescope.nvim/blob/3a12a853ebf21ec1cce9a92290e3013f8ae75f02/README.md?plain=1#L145-L149
+--- copyv: begin https://github.com/nvim-telescope/telescope.nvim/blob/63e279049652b514b7c3cbe5f6b248db53d77516/README.md?plain=1#L138-L142
++-- copyv: begin https://github.com/nvim-telescope/telescope.nvim/blob/3a12a853ebf21ec1cce9a92290e3013f8ae75f02/README.md?plain=1#L145-L149
  local builtin = require('telescope.builtin')
 -vim.keymap.set('n', 'ff', builtin.find_files, {})
 -vim.keymap.set('n', 'fg', builtin.live_grep, {})

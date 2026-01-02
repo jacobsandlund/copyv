@@ -330,7 +330,7 @@ fn updateFile(
                 allocator,
                 ctx,
                 file_name,
-                line_number,
+                &line_number,
                 &updated_bytes,
                 &lines,
                 line,
@@ -500,7 +500,7 @@ fn updateChunk(
     allocator: std.mem.Allocator,
     ctx: GlobalContext,
     file_name: []const u8,
-    start_line_number: usize,
+    line_number: *usize,
     updated_bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
@@ -540,7 +540,7 @@ fn updateChunk(
     var action: Action = undefined;
     var url_with_line_numbers: []const u8 = undefined;
 
-    if (std.mem.eql(u8, first_arg, "track")) {
+    if (std.mem.eql(u8, first_arg, "begin")) {
         action = .track;
         url_with_line_numbers = line_args.rest();
     } else if (std.mem.eql(u8, first_arg, "freeze")) {
@@ -549,7 +549,7 @@ fn updateChunk(
     } else if (std.mem.eql(u8, first_arg, "end")) {
         std.debug.panic(
             "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
-            .{ file_name, start_line_number },
+            .{ file_name, line_number.* },
         );
     } else { // get
         if (std.mem.startsWith(u8, first_arg, "g")) { // get
@@ -563,7 +563,7 @@ fn updateChunk(
             } else {
                 std.debug.panic("{s}[{d}]: Expected an argument after get\n", .{
                     file_name,
-                    start_line_number,
+                    line_number.*,
                 });
             }
             url_with_line_numbers = line_args.rest();
@@ -573,18 +573,18 @@ fn updateChunk(
         } else {
             std.debug.panic("{s}[{d}]: Unknown action: {s}\n", .{
                 file_name,
-                start_line_number,
+                line_number.*,
                 first_arg,
             });
         }
     }
 
     if (!std.mem.startsWith(u8, url_with_line_numbers, "https://")) {
-        std.debug.panic("{s}[{d}]: URL must start with https://\n", .{ file_name, start_line_number });
+        std.debug.panic("{s}[{d}]: URL must start with https://\n", .{ file_name, line_number.* });
     }
     const after_protocol = url_with_line_numbers["https://".len..];
     const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
-        std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, start_line_number });
+        std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, line_number.* });
     };
     const host = after_protocol[0..host_end];
     const url_path = after_protocol[host_end + 1 ..]; // strip leading '/'
@@ -592,7 +592,7 @@ fn updateChunk(
     const platform = Platform.parse(host) catch {
         std.debug.panic("{s}[{d}]: Unsupported host: {s}\n", .{
             file_name,
-            start_line_number,
+            line_number.*,
             host,
         });
     };
@@ -603,7 +603,7 @@ fn updateChunk(
         .codeberg => "/src/",
     };
     const marker_index = std.mem.indexOf(u8, url_path, marker) orelse {
-        std.debug.panic("{s}[{d}]: URL must contain {s}\n", .{ file_name, start_line_number, marker });
+        std.debug.panic("{s}[{d}]: URL must contain {s}\n", .{ file_name, line_number.*, marker });
     };
     const repo = url_path[0..marker_index];
     const after_marker = url_path[marker_index + marker.len ..];
@@ -616,7 +616,7 @@ fn updateChunk(
         if (ctx.platform_filter.isEnabled(platform) and ref.len != 40) {
             std.debug.panic(
                 "{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n",
-                .{ file_name, start_line_number },
+                .{ file_name, line_number.* },
             );
         }
 
@@ -627,7 +627,7 @@ fn updateChunk(
                 indent,
                 file_type_info,
                 file_name,
-                start_line_number,
+                line_number,
             );
             const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
             try updated_bytes.appendSlice(
@@ -644,7 +644,7 @@ fn updateChunk(
     }
 
     const fragment_index = std.mem.indexOfScalar(u8, path_with_query_and_fragment, '#') orelse {
-        std.debug.panic("{s}[{d}]: URL must contain line numbers fragment #L...\n", .{ file_name, start_line_number });
+        std.debug.panic("{s}[{d}]: URL must contain line numbers fragment #L...\n", .{ file_name, line_number.* });
     };
     const path_with_query = path_with_query_and_fragment[0..fragment_index];
     const line_numbers_str = path_with_query_and_fragment[fragment_index + 1 ..];
@@ -696,7 +696,7 @@ fn updateChunk(
             indent,
             file_type_info,
             file_name,
-            start_line_number,
+            line_number,
         );
         const current_end = end_line.ptr - lines.buffer.ptr - 1;
         current_chunk = lines.buffer[current_start..current_end];
@@ -914,7 +914,7 @@ fn updateChunk(
                     if (code >= 127) {
                         std.debug.panic("{s}[{d}]: Unexpected merge result error code: {d}\n", .{
                             file_name,
-                            start_line_number,
+                            line_number.*,
                             code,
                         });
                     } else if (code != 0) {
@@ -924,7 +924,7 @@ fn updateChunk(
                 else => {
                     std.debug.panic("{s}[{d}]: Unexpected merge result term\n", .{
                         file_name,
-                        start_line_number,
+                        line_number.*,
                     });
                 },
             }
@@ -933,7 +933,7 @@ fn updateChunk(
 
     // Write back bytes
 
-    const command = if (action == .get_freeze) "freeze" else "track";
+    const command = if (action == .get_freeze) "freeze" else "begin";
     const updated_url = switch (platform) {
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
@@ -1170,13 +1170,13 @@ fn skipToEndLine(
     indent: Indent,
     file_type_info: FileTypeInfo,
     file_name: []const u8,
-    start_line_number: usize,
+    line_number: *usize,
 ) []const u8 {
-    var line_number = start_line_number;
     var file_indent: ?Indent = indent;
     var nesting: usize = 0;
+    line_number.* += 1;
 
-    return while (lines.next()) |line| : (line_number += 1) {
+    return while (lines.next()) |line| : (line_number.* += 1) {
         if (!mightMatchTag(line)) continue;
 
         const match = matchesTag(line, file_type_info, &file_indent, "");
@@ -1193,7 +1193,8 @@ fn skipToEndLine(
 
             nesting -= 1;
         } else if (std.mem.startsWith(u8, first_arg, "fr") or // "freeze"
-            std.mem.startsWith(u8, first_arg, "tr") // "track"
+            std.mem.startsWith(u8, first_arg, "tr") or // TODO: delete "track"
+            std.mem.startsWith(u8, first_arg, "be") // "begin"
         ) {
             nesting += 1;
         }
@@ -1202,7 +1203,7 @@ fn skipToEndLine(
             "{s}[{d}]: Expected copyv: end, but instead reached end of file\n",
             .{
                 file_name,
-                line_number,
+                line_number.*,
             },
         );
     };
