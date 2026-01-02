@@ -563,6 +563,8 @@ fn updateChunk(
             if (line_args.peek()) |peek| {
                 if (std.mem.startsWith(u8, peek, "f")) { // freeze
                     action = .get_freeze;
+                } else if (peek.len == 0) {
+                    action = .get;
                 } else {
                     std.debug.panic("{s}[{d}]: Unknown argument after 'get': {s}\n", .{
                         file_name,
@@ -1541,6 +1543,8 @@ pub fn main() !void {
                 std.debug.panic("Unknown platform: {s}\n", .{host});
             };
             current_filter.setPlatform(platform, enable);
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
             name = arg;
             const stat = try std.fs.cwd().statFile(arg);
@@ -1557,4 +1561,18 @@ pub fn main() !void {
     };
 
     try recursivelyUpdate(ctx, std.fs.cwd(), name, kind);
+
+    while (arg_it.next()) |arg| {
+        const stat = std.fs.cwd().statFile(arg) catch |err| switch (err) {
+            error.FileNotFound => {
+                if (std.mem.startsWith(u8, arg, "-")) {
+                    std.debug.panic("Options must be specified before the first file (or this file isn't found): {s}\n", .{arg});
+                }
+                return err;
+            },
+            else => |e| return e,
+        };
+
+        try recursivelyUpdate(ctx, std.fs.cwd(), arg, stat.kind);
+    }
 }
