@@ -564,8 +564,14 @@ fn updateChunk(
                 if (std.mem.startsWith(u8, peek, "f")) { // freeze
                     action = .get_freeze;
                 } else {
-                    action = .get;
+                    std.debug.panic("{s}[{d}]: Unknown argument after 'get': {s}\n", .{
+                        file_name,
+                        line_number.*,
+                        peek,
+                    });
                 }
+            } else {
+                action = .get;
             }
         } else {
             std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
@@ -611,7 +617,7 @@ fn updateChunk(
     if (!ctx.platform_filter.isEnabled(platform) or action == .check_freeze) {
         if (ctx.platform_filter.isEnabled(platform) and ref.len != 40) {
             std.debug.panic(
-                "{s}[{d}]: 'copyv: freeze' line must point to a commit SHA\n",
+                "{s}[{d}]: 'freeze' line must point to a commit SHA\n",
                 .{ file_name, line_number.* },
             );
         }
