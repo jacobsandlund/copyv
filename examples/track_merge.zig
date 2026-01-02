@@ -3,8 +3,6 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));
 
     // I've added a comment here, this should stay.
-    // But I added this comment later, and it'll cause conflicts in
-    // track_with_nested_copyv.zig
     const f = self.data_f orelse return;
     var r = std.io.bufferedReader(f.reader());
     var d: UTF8Decoder = .{};
@@ -28,8 +26,8 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
                     table.get(@intCast(cp)).width;
 
                 // Write the width to the buffer to avoid it being compiled
-                // away. The below is changed.
-                buf[4095] = @intCast(width);
+                // away
+                buf[0] = @intCast(width);
             }
         }
     }
