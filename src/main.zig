@@ -559,13 +559,40 @@ fn updateChunk(
                 "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
                 .{ file_name, line_number.* },
             );
-        } else if (std.mem.eql(u8, arg, "indent") or std.mem.eql(u8, arg, "indent-ours")) {
+        } else if (std.mem.eql(u8, arg, "indent") or std.mem.eql(u8, arg, "our-indent")) {
             has_command = true;
             handleIndentCommands(
                 &line_args,
                 &file_settings.current_indent,
+                true,
                 file_name,
                 line_number.*,
+            );
+        } else if (std.mem.eql(u8, arg, "their-indent")) {
+            has_command = true;
+            handleIndentCommands(
+                &line_args,
+                &file_settings.new_indent,
+                false,
+                file_name,
+                line_number.*,
+            );
+            copyIndentAsDefault(
+                &file_settings.base_indent,
+                file_settings.new_indent,
+            );
+        } else if (std.mem.eql(u8, arg, "base-indent")) {
+            has_command = true;
+            handleIndentCommands(
+                &line_args,
+                &file_settings.base_indent,
+                false,
+                file_name,
+                line_number.*,
+            );
+            copyIndentAsDefault(
+                &file_settings.new_indent,
+                file_settings.base_indent,
             );
         } else if (std.mem.eql(u8, arg, "freeze") or std.mem.eql(u8, arg, "frozen")) {
             has_command = true;
@@ -626,8 +653,38 @@ fn updateChunk(
             } else {
                 chunk_action = .get;
             }
-        } else if (std.mem.eql(u8, command, "indent") or std.mem.eql(u8, command, "indent-ours")) {
-            handleIndentCommands(&line_args, &indent, file_name, line_number.*);
+        } else if (std.mem.eql(u8, command, "indent") or std.mem.eql(u8, command, "our-indent")) {
+            handleIndentCommands(
+                &line_args,
+                &indent,
+                true,
+                file_name,
+                line_number.*,
+            );
+        } else if (std.mem.eql(u8, command, "their-indent")) {
+            handleIndentCommands(
+                &line_args,
+                &new_indent,
+                false,
+                file_name,
+                line_number.*,
+            );
+            copyIndentAsDefault(
+                &base_indent,
+                new_indent,
+            );
+        } else if (std.mem.eql(u8, command, "base-indent")) {
+            handleIndentCommands(
+                &line_args,
+                &base_indent,
+                false,
+                file_name,
+                line_number.*,
+            );
+            copyIndentAsDefault(
+                &new_indent,
+                base_indent,
+            );
         } else if (command.len > 0) {
             std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
                 file_name,
@@ -745,7 +802,7 @@ fn updateChunk(
         &base_indented,
         base_bytes,
         indent,
-        &base_indent,
+        base_indent,
         file_type_info,
     );
 
@@ -908,7 +965,7 @@ fn updateChunk(
             &new_indented,
             new_bytes,
             indent,
-            &new_indent,
+            new_indent,
             file_type_info,
         );
 
@@ -996,13 +1053,32 @@ fn updateChunk(
     // Write back bytes
 
     const command = if (action == .get_freeze) "freeze" else "begin";
-    var commands: []const u8 = undefined;
-    if (indent.enabled != file_settings.current_indent.enabled or
+    const indent_differs = indent.enabled != file_settings.current_indent.enabled or
         indent.width.? != file_settings.current_indent.width.? or
-        indent.char.? != file_settings.current_indent.char.?)
+        indent.char.? != file_settings.current_indent.char.?;
+    const base_char_differs = (base_indent.char != null and
+        base_indent.char != file_settings.base_indent.char);
+    const base_width_differs = (base_indent.width != null and
+        base_indent.width != file_settings.base_indent.width);
+    const base_indent_differs = base_char_differs or base_width_differs;
+    const new_char_differs = (new_indent.char != null and
+        new_indent.char != file_settings.new_indent.char);
+    const new_width_differs = (new_indent.width != null and
+        new_indent.width != file_settings.new_indent.width);
+    const new_indent_differs = new_char_differs or new_width_differs;
+    var commands: []const u8 = undefined;
+    if (indent_differs or
+        base_indent_differs or
+        new_indent_differs)
     {
-        var array = try std.ArrayList([]const u8).initCapacity(allocator, 3);
-        array.appendAssumeCapacity("indent");
+        var array = try std.ArrayList([]const u8).initCapacity(allocator, 10);
+        if (indent_differs) {
+            if (base_indent_differs or new_indent_differs) {
+                array.appendAssumeCapacity("our-indent");
+            } else {
+                array.appendAssumeCapacity("indent");
+            }
+        }
         if (indent.enabled != file_settings.current_indent.enabled) {
             array.appendAssumeCapacity(if (indent.enabled) "on" else "off");
         }
@@ -1019,6 +1095,50 @@ fn updateChunk(
                 .{indent.width.?},
             ));
         }
+
+        if (base_indent_differs or new_indent_differs) {
+            if (base_indent_differs) {
+                array.appendAssumeCapacity("base-indent");
+
+                if (base_char_differs) {
+                    array.appendAssumeCapacity(if (base_indent.char.? == ' ')
+                        "spaces"
+                    else
+                        "tabs");
+                }
+
+                if (base_width_differs) {
+                    array.appendAssumeCapacity(try std.fmt.allocPrint(
+                        allocator,
+                        "{d}",
+                        .{base_indent.width.?},
+                    ));
+                }
+            }
+
+            if (new_indent_differs and
+                (new_indent.char != base_indent.char or
+                    new_indent.width != base_indent.width))
+            {
+                array.appendAssumeCapacity("their-indent");
+
+                if (new_char_differs and new_indent.char != base_indent.char) {
+                    array.appendAssumeCapacity(if (new_indent.char.? == ' ')
+                        "spaces"
+                    else
+                        "tabs");
+                }
+
+                if (new_width_differs and new_indent.width != base_indent.width) {
+                    array.appendAssumeCapacity(try std.fmt.allocPrint(
+                        allocator,
+                        "{d}",
+                        .{new_indent.width.?},
+                    ));
+                }
+            }
+        }
+
         array.appendAssumeCapacity(command);
         commands = try std.mem.join(allocator, " ", array.items);
     } else {
@@ -1079,6 +1199,7 @@ fn updateChunk(
 fn handleIndentCommands(
     args: *std.mem.SplitIterator(u8, .scalar),
     indent: *Indent,
+    allow_enable_toggling: bool,
     file_name: []const u8,
     line_number: usize,
 ) void {
@@ -1092,8 +1213,20 @@ fn handleIndentCommands(
     while (true) {
         if (args.peek()) |peek| {
             if (std.mem.eql(u8, peek, "off")) {
+                if (!allow_enable_toggling) {
+                    std.debug.panic(
+                        "{s}[{d}]: Argument 'off' not allowed for 'base-indent' or 'their-indent': use 'indent'/'our-indent' instead\n",
+                        .{ file_name, line_number },
+                    );
+                }
                 indent.enabled = false;
             } else if (std.mem.eql(u8, peek, "on")) {
+                if (!allow_enable_toggling) {
+                    std.debug.panic(
+                        "{s}[{d}]: Argument 'on' not allowed for 'base-indent' or 'their-indent': use 'indent'/'our-indent' instead\n",
+                        .{ file_name, line_number },
+                    );
+                }
                 indent.enabled = true;
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
@@ -1109,6 +1242,18 @@ fn handleIndentCommands(
         } else {
             break;
         }
+    }
+}
+
+fn copyIndentAsDefault(
+    dest: *Indent,
+    source: Indent,
+) void {
+    if (dest.char == null) {
+        dest.char = source.char;
+    }
+    if (dest.width == null) {
+        dest.width = source.width;
     }
 }
 
@@ -1493,7 +1638,7 @@ fn matchIndent(
     updated_bytes: *std.ArrayList(u8),
     bytes: []const u8,
     desired: Indent,
-    current: *Indent,
+    current_override: Indent,
     file_type_info: FileTypeInfo,
 ) !void {
     if (!desired.enabled) {
@@ -1501,7 +1646,8 @@ fn matchIndent(
         return;
     }
 
-    getIndent(current, bytes, file_type_info);
+    var current = current_override;
+    getIndent(&current, bytes, file_type_info);
 
     const current_width = current.width.?;
     const current_start = current.start.?;
