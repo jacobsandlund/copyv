@@ -1056,24 +1056,18 @@ fn updateChunk(
     const indent_differs = indent.enabled != file_settings.current_indent.enabled or
         indent.width.? != file_settings.current_indent.width.? or
         indent.char.? != file_settings.current_indent.char.?;
-    const base_char_differs = (base_indent.char != null and
-        base_indent.char != file_settings.base_indent.char);
-    const base_width_differs = (base_indent.width != null and
-        base_indent.width != file_settings.base_indent.width);
-    const base_indent_differs = base_char_differs or base_width_differs;
+    // We don't care if base indent differs, since we've already merged in the
+    // new changes by now.
     const new_char_differs = (new_indent.char != null and
         new_indent.char != file_settings.new_indent.char);
     const new_width_differs = (new_indent.width != null and
         new_indent.width != file_settings.new_indent.width);
     const new_indent_differs = new_char_differs or new_width_differs;
     var commands: []const u8 = undefined;
-    if (indent_differs or
-        base_indent_differs or
-        new_indent_differs)
-    {
+    if (indent_differs or new_indent_differs) {
         var array = try std.ArrayList([]const u8).initCapacity(allocator, 10);
         if (indent_differs) {
-            if (base_indent_differs or new_indent_differs) {
+            if (new_indent_differs) {
                 array.appendAssumeCapacity("our-indent");
             } else {
                 array.appendAssumeCapacity("indent");
@@ -1096,46 +1090,23 @@ fn updateChunk(
             ));
         }
 
-        if (base_indent_differs or new_indent_differs) {
-            if (base_indent_differs) {
-                array.appendAssumeCapacity("base-indent");
+        if (new_indent_differs) {
+            // The `new_indent` is now the new `base_indent`
+            array.appendAssumeCapacity("base-indent");
 
-                if (base_char_differs) {
-                    array.appendAssumeCapacity(if (base_indent.char.? == ' ')
-                        "spaces"
-                    else
-                        "tabs");
-                }
-
-                if (base_width_differs) {
-                    array.appendAssumeCapacity(try std.fmt.allocPrint(
-                        allocator,
-                        "{d}",
-                        .{base_indent.width.?},
-                    ));
-                }
+            if (new_char_differs) {
+                array.appendAssumeCapacity(if (new_indent.char.? == ' ')
+                    "spaces"
+                else
+                    "tabs");
             }
 
-            if (new_indent_differs and
-                (new_indent.char != base_indent.char or
-                    new_indent.width != base_indent.width))
-            {
-                array.appendAssumeCapacity("their-indent");
-
-                if (new_char_differs and new_indent.char != base_indent.char) {
-                    array.appendAssumeCapacity(if (new_indent.char.? == ' ')
-                        "spaces"
-                    else
-                        "tabs");
-                }
-
-                if (new_width_differs and new_indent.width != base_indent.width) {
-                    array.appendAssumeCapacity(try std.fmt.allocPrint(
-                        allocator,
-                        "{d}",
-                        .{new_indent.width.?},
-                    ));
-                }
+            if (new_width_differs) {
+                array.appendAssumeCapacity(try std.fmt.allocPrint(
+                    allocator,
+                    "{d}",
+                    .{new_indent.width.?},
+                ));
             }
         }
 
