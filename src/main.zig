@@ -998,12 +998,19 @@ fn updateChunk(
     const command = if (action == .get_freeze) "freeze" else "begin";
     var commands: []const u8 = undefined;
     if (indent.enabled != file_settings.current_indent.enabled or
-        indent.width != file_settings.current_indent.width)
+        indent.width.? != file_settings.current_indent.width.? or
+        indent.char.? != file_settings.current_indent.char.?)
     {
         var array = try std.ArrayList([]const u8).initCapacity(allocator, 3);
         array.appendAssumeCapacity("indent");
         if (indent.enabled != file_settings.current_indent.enabled) {
             array.appendAssumeCapacity(if (indent.enabled) "on" else "off");
+        }
+        if (indent.char.? != file_settings.current_indent.char.?) {
+            array.appendAssumeCapacity(if (indent.char.? == ' ')
+                "spaces"
+            else
+                "tabs");
         }
         if (indent.width.? != file_settings.current_indent.width.?) {
             array.appendAssumeCapacity(try std.fmt.allocPrint(
@@ -1088,6 +1095,10 @@ fn handleIndentCommands(
                 indent.enabled = false;
             } else if (std.mem.eql(u8, peek, "on")) {
                 indent.enabled = true;
+            } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
+                indent.char = '\t';
+            } else if (std.mem.eql(u8, peek, "space") or std.mem.eql(u8, peek, "spaces")) {
+                indent.char = ' ';
             } else {
                 // Unknown commands will be handled in caller
                 indent.width = std.fmt.parseUnsigned(usize, peek, 10) catch break;
