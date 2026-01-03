@@ -433,6 +433,7 @@ fn matchesTag(
                 return .{
                     .prefix = prefix,
                     .indent = .{
+                        .enabled = file_indent.enabled,
                         .start = getIndentStart(
                             line[0..comment_start],
                             file_indent.width.?,
@@ -539,21 +540,36 @@ fn updateChunk(
     }
     const line_payload = std.mem.trim(u8, line_remainder, line_whitespace);
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
-    const url_with_line_numbers = line_args.first();
+    const first = line_args.first();
     var action: Action = undefined;
 
-    if (std.mem.eql(u8, url_with_line_numbers, "end")) {
+    if (std.mem.eql(u8, first, "end")) {
         std.debug.panic(
             "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
             .{ file_name, line_number.* },
         );
-    } else if (!std.mem.startsWith(u8, url_with_line_numbers, "https://")) {
+    } else if (std.mem.eql(u8, first, "indent")) {
+        if (line_args.next()) |peek| {
+            if (std.mem.eql(u8, peek, "off")) {
+                file_indent.enabled = false;
+            }
+        } else {
+            std.debug.panic(
+                "{s}[{d}]: Expected argument (e.g. 'off', 'tabs', 'spaces', '4') after 'indent' command\n",
+                .{ file_name, line_number.* },
+            );
+        }
+        try updated_bytes.appendSlice(allocator, current_line);
+        try maybeAppendNewline(allocator, updated_bytes, lines);
+        return .untouched;
+    } else if (!std.mem.startsWith(u8, first, "https://")) {
         std.debug.panic(
             "{s}[{d}]: Expected a URL beginning with https:// after 'copyv:'",
             .{ file_name, line_number.* },
         );
     }
 
+    const url_with_line_numbers = first;
     const second_arg = line_args.next();
     if (second_arg) |command| {
         if (std.mem.eql(u8, command, "begin")) {
@@ -1249,8 +1265,6 @@ fn getIndentStart(
 }
 
 fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) void {
-    if (!indent.enabled) return;
-
     if (indent.char == null) {
         var space_count: usize = 0;
         var tab_count: usize = 0;
