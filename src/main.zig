@@ -322,8 +322,8 @@ fn updateFile(
     var has_conflicts = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
-    var indent: FileIndent = .{
-        .current = .{
+    var settings: FileSettings = .{
+        .current_indent = .{
             .start = 0,
         },
     };
@@ -339,7 +339,7 @@ fn updateFile(
                 &lines,
                 line,
                 file_type_info,
-                &indent,
+                &settings,
             )) {
                 .updated => {
                     has_update = true;
@@ -407,10 +407,11 @@ const Indent = struct {
     char: ?u8 = null, // ' ' or '\t'
 };
 
-const FileIndent = struct {
-    current: Indent = .{},
-    base: Indent = .{},
-    new: Indent = .{},
+const FileSettings = struct {
+    freeze: bool = false,
+    current_indent: Indent = .{},
+    base_indent: Indent = .{},
+    new_indent: Indent = .{},
 };
 
 const line_whitespace = " \t";
@@ -514,13 +515,13 @@ fn updateChunk(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     file_type_info: FileTypeInfo,
-    file_indent: *FileIndent,
+    file_settings: *FileSettings,
 ) !ChunkStatus {
     // Check if matches tag
     const maybe_match = matchesTag(
         current_line,
         file_type_info,
-        &file_indent.current,
+        &file_settings.current_indent,
         lines.buffer,
     );
 
@@ -531,8 +532,8 @@ fn updateChunk(
     const match = maybe_match.?;
     const prefix = match.prefix;
     var indent: Indent = match.indent;
-    var base_indent: Indent = file_indent.base;
-    var new_indent: Indent = file_indent.new;
+    var base_indent: Indent = file_settings.base_indent;
+    var new_indent: Indent = file_settings.new_indent;
 
     // Get the files from remote
 
@@ -560,7 +561,15 @@ fn updateChunk(
             );
         } else if (std.mem.eql(u8, arg, "indent")) {
             has_command = true;
-            handleIndentCommands(&line_args, &file_indent.current, file_name, line_number.*);
+            handleIndentCommands(
+                &line_args,
+                &file_settings.current_indent,
+                file_name,
+                line_number.*,
+            );
+        } else if (std.mem.eql(u8, arg, "freeze") or std.mem.eql(u8, arg, "frozen")) {
+            has_command = true;
+            file_settings.freeze = true;
         } else if (std.mem.startsWith(u8, arg, "https://")) {
             if (has_command) {
                 std.debug.panic(
@@ -593,27 +602,27 @@ fn updateChunk(
         return .untouched;
     }
 
-    var action: Action = .get;
+    var chunk_action: Action = .get;
 
     while (line_args.next()) |command| {
         if (std.mem.eql(u8, command, "begin")) {
-            action = .track;
+            chunk_action = .track;
         } else if (std.mem.eql(u8, command, "freeze")) {
-            action = .check_freeze;
+            chunk_action = .check_freeze;
         } else if (std.mem.startsWith(u8, command, "gf")) { // get freeze
-            action = .get_freeze;
+            chunk_action = .get_freeze;
         } else if (std.mem.startsWith(u8, command, "g")) { // get
             if (line_args.peek()) |peek| {
                 if (std.mem.startsWith(u8, peek, "f")) { // freeze
-                    action = .get_freeze;
+                    chunk_action = .get_freeze;
 
                     // Consume peeked arg
                     _ = line_args.next();
                 } else {
-                    action = .get;
+                    chunk_action = .get;
                 }
             } else {
-                action = .get;
+                chunk_action = .get;
             }
         } else if (std.mem.eql(u8, command, "indent")) {
             handleIndentCommands(&line_args, &indent, file_name, line_number.*);
@@ -625,6 +634,11 @@ fn updateChunk(
             });
         }
     }
+
+    const action: Action = if (file_settings.freeze)
+        .check_freeze
+    else
+        chunk_action;
 
     const after_protocol = url_with_line_numbers["https://".len..];
     const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
@@ -981,7 +995,7 @@ fn updateChunk(
 
     const command = if (action == .get_freeze) "freeze" else "begin";
     var commands: []const u8 = undefined;
-    if (indent.enabled != file_indent.current.enabled) {
+    if (indent.enabled != file_settings.current_indent.enabled) {
         commands = try std.fmt.allocPrint(
             allocator,
             "indent {s} {s}",
