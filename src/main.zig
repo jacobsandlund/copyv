@@ -1058,10 +1058,8 @@ fn updateChunk(
         indent.char.? != file_settings.current_indent.char.?;
     // We don't care if base indent differs, since we've already merged in the
     // new changes by now.
-    const new_char_differs = (new_indent.char != null and
-        new_indent.char != file_settings.new_indent.char);
-    const new_width_differs = (new_indent.width != null and
-        new_indent.width != file_settings.new_indent.width);
+    const new_char_differs = new_indent.char != file_settings.base_indent.char;
+    const new_width_differs = new_indent.width != file_settings.base_indent.width;
     const new_indent_differs = new_char_differs or new_width_differs;
     var commands: []const u8 = undefined;
     if (indent_differs or new_indent_differs) {
