@@ -322,8 +322,10 @@ fn updateFile(
     var has_conflicts = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
-    var indent: Indent = .{
-        .start = 0,
+    var indent: FileIndent = .{
+        .current = .{
+            .start = 0,
+        },
     };
 
     while (lines.next()) |line| : (line_number += 1) {
@@ -403,6 +405,12 @@ const Indent = struct {
 
     width: ?usize = null,
     char: ?u8 = null, // ' ' or '\t'
+};
+
+const FileIndent = struct {
+    current: Indent = .{},
+    base: Indent = .{},
+    new: Indent = .{},
 };
 
 const line_whitespace = " \t";
@@ -506,13 +514,13 @@ fn updateChunk(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     file_type_info: FileTypeInfo,
-    file_indent: *Indent,
+    file_indent: *FileIndent,
 ) !ChunkStatus {
     // Check if matches tag
     const maybe_match = matchesTag(
         current_line,
         file_type_info,
-        file_indent,
+        &file_indent.current,
         lines.buffer,
     );
 
@@ -522,10 +530,9 @@ fn updateChunk(
 
     const match = maybe_match.?;
     const prefix = match.prefix;
-    // TODO: var indent
-    const indent: Indent = match.indent;
-    var base_indent: Indent = .{};
-    var new_indent: Indent = .{};
+    var indent: Indent = match.indent;
+    var base_indent: Indent = file_indent.base;
+    var new_indent: Indent = file_indent.new;
 
     // Get the files from remote
 
@@ -540,38 +547,55 @@ fn updateChunk(
     }
     const line_payload = std.mem.trim(u8, line_remainder, line_whitespace);
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
-    const first = line_args.first();
-    var action: Action = undefined;
 
-    if (std.mem.eql(u8, first, "end")) {
-        std.debug.panic(
-            "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
-            .{ file_name, line_number.* },
-        );
-    } else if (std.mem.eql(u8, first, "indent")) {
-        if (line_args.next()) |peek| {
-            if (std.mem.eql(u8, peek, "off")) {
-                file_indent.enabled = false;
-            }
-        } else {
+    var url_with_line_numbers: []const u8 = undefined;
+    var has_command: bool = false;
+    var has_url: bool = false;
+
+    while (line_args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "end")) {
             std.debug.panic(
-                "{s}[{d}]: Expected argument (e.g. 'off', 'tabs', 'spaces', '4') after 'indent' command\n",
+                "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
                 .{ file_name, line_number.* },
             );
+        } else if (std.mem.eql(u8, arg, "indent")) {
+            has_command = true;
+            handleIndentCommands(&line_args, &file_indent.current, file_name, line_number.*);
+        } else if (std.mem.startsWith(u8, arg, "https://")) {
+            if (has_command) {
+                std.debug.panic(
+                    "{s}[{d}]: Unexpected URL after command. Command must either follow URL (applies only to that block), or be on a separate line (applies to all following blocks in the file)\n",
+                    .{ file_name, line_number.* },
+                );
+            }
+
+            has_url = true;
+            url_with_line_numbers = arg;
+            break;
+        } else if (arg.len > 0) {
+            std.debug.panic(
+                "{s}[{d}]: Expected a valid command or a URL beginning with https:// after 'copyv:', got: {s}",
+                .{ file_name, line_number.*, arg },
+            );
         }
-        try updated_bytes.appendSlice(allocator, current_line);
-        try maybeAppendNewline(allocator, updated_bytes, lines);
-        return .untouched;
-    } else if (!std.mem.startsWith(u8, first, "https://")) {
+    }
+
+    if (!has_command and !has_url) {
         std.debug.panic(
-            "{s}[{d}]: Expected a URL beginning with https:// after 'copyv:'",
+            "{s}[{d}]: Expected a command or a URL beginning with https:// after 'copyv:'",
             .{ file_name, line_number.* },
         );
     }
 
-    const url_with_line_numbers = first;
-    const second_arg = line_args.next();
-    if (second_arg) |command| {
+    if (has_command) {
+        try updated_bytes.appendSlice(allocator, current_line);
+        try maybeAppendNewline(allocator, updated_bytes, lines);
+        return .untouched;
+    }
+
+    var action: Action = .get;
+
+    while (line_args.next()) |command| {
         if (std.mem.eql(u8, command, "begin")) {
             action = .track;
         } else if (std.mem.eql(u8, command, "freeze")) {
@@ -582,27 +606,24 @@ fn updateChunk(
             if (line_args.peek()) |peek| {
                 if (std.mem.startsWith(u8, peek, "f")) { // freeze
                     action = .get_freeze;
-                } else if (peek.len == 0) {
-                    action = .get;
+
+                    // Consume peeked arg
+                    _ = line_args.next();
                 } else {
-                    std.debug.panic("{s}[{d}]: Unknown argument after 'get': {s}\n", .{
-                        file_name,
-                        line_number.*,
-                        peek,
-                    });
+                    action = .get;
                 }
             } else {
                 action = .get;
             }
-        } else {
+        } else if (std.mem.eql(u8, command, "indent")) {
+            handleIndentCommands(&line_args, &indent, file_name, line_number.*);
+        } else if (command.len > 0) {
             std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
                 file_name,
                 line_number.*,
                 command,
             });
         }
-    } else {
-        action = .get;
     }
 
     const after_protocol = url_with_line_numbers["https://".len..];
@@ -959,6 +980,19 @@ fn updateChunk(
     // Write back bytes
 
     const command = if (action == .get_freeze) "freeze" else "begin";
+    var commands: []const u8 = undefined;
+    if (indent.enabled != file_indent.current.enabled) {
+        commands = try std.fmt.allocPrint(
+            allocator,
+            "indent {s} {s}",
+            .{
+                if (indent.enabled) "on" else "off",
+                command,
+            },
+        );
+    } else {
+        commands = command;
+    }
     const updated_url = switch (platform) {
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
@@ -972,7 +1006,7 @@ fn updateChunk(
                 path_with_query,
                 new_start,
                 new_end,
-                command,
+                commands,
             },
         ),
         .gitlab => try std.fmt.allocPrint(
@@ -986,7 +1020,7 @@ fn updateChunk(
                 path_with_query,
                 new_start,
                 new_end,
-                command,
+                commands,
             },
         ),
     };
@@ -1008,6 +1042,38 @@ fn updateChunk(
         return .updated_with_conflicts;
     } else {
         return .updated;
+    }
+}
+
+fn handleIndentCommands(
+    args: *std.mem.SplitIterator(u8, .scalar),
+    indent: *Indent,
+    file_name: []const u8,
+    line_number: usize,
+) void {
+    if (args.peek() == null) {
+        std.debug.panic(
+            "{s}[{d}]: Expected argument (e.g. 'off', 'tabs', 'spaces', '4') after 'indent' command\n",
+            .{ file_name, line_number },
+        );
+    }
+
+    while (true) {
+        if (args.peek()) |peek| {
+            if (std.mem.eql(u8, peek, "off")) {
+                indent.enabled = false;
+            } else if (std.mem.eql(u8, peek, "on")) {
+                indent.enabled = true;
+            } else {
+                // Unknown commands will be handled in caller
+                break;
+            }
+
+            // Consume peeked arg
+            _ = args.next();
+        } else {
+            break;
+        }
     }
 }
 
