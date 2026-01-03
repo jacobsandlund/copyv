@@ -559,7 +559,7 @@ fn updateChunk(
                 "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
                 .{ file_name, line_number.* },
             );
-        } else if (std.mem.eql(u8, arg, "indent")) {
+        } else if (std.mem.eql(u8, arg, "indent") or std.mem.eql(u8, arg, "indent-ours")) {
             has_command = true;
             handleIndentCommands(
                 &line_args,
@@ -606,7 +606,9 @@ fn updateChunk(
 
     while (line_args.next()) |command| {
         if (std.mem.eql(u8, command, "begin")) {
-            chunk_action = .track;
+            if (chunk_action != .check_freeze) {
+                chunk_action = .track;
+            }
         } else if (std.mem.eql(u8, command, "freeze")) {
             chunk_action = .check_freeze;
         } else if (std.mem.startsWith(u8, command, "gf")) { // get freeze
@@ -624,7 +626,7 @@ fn updateChunk(
             } else {
                 chunk_action = .get;
             }
-        } else if (std.mem.eql(u8, command, "indent")) {
+        } else if (std.mem.eql(u8, command, "indent") or std.mem.eql(u8, command, "indent-ours")) {
             handleIndentCommands(&line_args, &indent, file_name, line_number.*);
         } else if (command.len > 0) {
             std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
@@ -710,14 +712,14 @@ fn updateChunk(
     const path = path_with_query[0..path_end];
     var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
     const base_start_str = line_numbers.first()["L".len..];
-    const base_start = try std.fmt.parseInt(usize, base_start_str, 10);
+    const base_start = try std.fmt.parseUnsigned(usize, base_start_str, 10);
     var base_end: usize = undefined;
     if (line_numbers.next()) |end_str| {
         const base_end_str = switch (platform) {
             .github, .codeberg => end_str["L".len..],
             .gitlab => end_str,
         };
-        base_end = try std.fmt.parseInt(usize, base_end_str, 10);
+        base_end = try std.fmt.parseUnsigned(usize, base_end_str, 10);
     } else {
         base_end = base_start;
     }
@@ -995,15 +997,23 @@ fn updateChunk(
 
     const command = if (action == .get_freeze) "freeze" else "begin";
     var commands: []const u8 = undefined;
-    if (indent.enabled != file_settings.current_indent.enabled) {
-        commands = try std.fmt.allocPrint(
-            allocator,
-            "indent {s} {s}",
-            .{
-                if (indent.enabled) "on" else "off",
-                command,
-            },
-        );
+    if (indent.enabled != file_settings.current_indent.enabled or
+        indent.width != file_settings.current_indent.width)
+    {
+        var array = try std.ArrayList([]const u8).initCapacity(allocator, 3);
+        array.appendAssumeCapacity("indent");
+        if (indent.enabled != file_settings.current_indent.enabled) {
+            array.appendAssumeCapacity(if (indent.enabled) "on" else "off");
+        }
+        if (indent.width.? != file_settings.current_indent.width.?) {
+            array.appendAssumeCapacity(try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{indent.width.?},
+            ));
+        }
+        array.appendAssumeCapacity(command);
+        commands = try std.mem.join(allocator, " ", array.items);
     } else {
         commands = command;
     }
@@ -1080,7 +1090,7 @@ fn handleIndentCommands(
                 indent.enabled = true;
             } else {
                 // Unknown commands will be handled in caller
-                break;
+                indent.width = std.fmt.parseUnsigned(usize, peek, 10) catch break;
             }
 
             // Consume peeked arg
@@ -1099,9 +1109,9 @@ const GitRange = struct {
 fn parseRange(range_str: []const u8) !GitRange {
     var parts = std.mem.splitScalar(u8, range_str, ',');
     const start_str = parts.next().?;
-    const start = try std.fmt.parseInt(usize, start_str[1..], 10);
+    const start = try std.fmt.parseUnsigned(usize, start_str[1..], 10);
     const len_str = parts.next().?;
-    const len = try std.fmt.parseInt(usize, len_str, 10);
+    const len = try std.fmt.parseUnsigned(usize, len_str, 10);
     return .{ .start = start, .len = len };
 }
 
