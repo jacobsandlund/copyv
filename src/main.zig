@@ -124,6 +124,8 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".mli", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".fs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".fsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ ".fsy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ ".fsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".factor", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "!" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".fth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".4th", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
