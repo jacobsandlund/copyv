@@ -276,7 +276,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".wgsl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "//" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".gradle", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".groovy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".nim", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#[", .end = "]#" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".nim", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "##" }, .{ .paired = .{ .begin = "#[", .end = "]#" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".http", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
