@@ -169,6 +169,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".kt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".kts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".latex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".lean", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/-", .end = "-/" } }, .{ .paired = .{ .begin = "/--", .end = "-/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".less", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".liquid", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{% comment %}", .end = "{% endcomment %}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".lisp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
