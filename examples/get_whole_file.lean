@@ -1,0 +1,1 @@
+--copyv: https://github.com/leanprover/lean4/blob/6a87c0e530953d97ec2d8331d59794e16d67c6c1/src/Lean/Parser/Attr.lean

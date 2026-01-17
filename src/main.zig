@@ -776,25 +776,28 @@ fn updateChunk(
         return .untouched;
     }
 
-    const fragment_index = std.mem.indexOfScalar(u8, path_with_query_and_fragment, '#') orelse {
-        std.debug.panic("{s}[{d}]: URL must contain line numbers fragment #L...\n", .{ file_name, line_number.* });
-    };
-    const path_with_query = path_with_query_and_fragment[0..fragment_index];
-    const line_numbers_str = path_with_query_and_fragment[fragment_index + 1 ..];
+    const fragment_index = std.mem.indexOfScalar(u8, path_with_query_and_fragment, '#');
+    const whole_file = fragment_index == null;
+    const path_with_query = path_with_query_and_fragment[0..(fragment_index orelse path_with_query_and_fragment.len)];
     const path_end = std.mem.indexOfScalar(u8, path_with_query, '?') orelse path_with_query.len;
     const path = path_with_query[0..path_end];
-    var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
-    const base_start_str = line_numbers.first()["L".len..];
-    const base_start = try std.fmt.parseUnsigned(usize, base_start_str, 10);
+
+    var base_start: usize = undefined;
     var base_end: usize = undefined;
-    if (line_numbers.next()) |end_str| {
-        const base_end_str = switch (platform) {
-            .github, .codeberg => end_str["L".len..],
-            .gitlab => end_str,
-        };
-        base_end = try std.fmt.parseUnsigned(usize, base_end_str, 10);
-    } else {
-        base_end = base_start;
+    if (!whole_file) {
+        const line_numbers_str = path_with_query_and_fragment[fragment_index.? + 1 ..];
+        var line_numbers = std.mem.splitScalar(u8, line_numbers_str, '-');
+        const base_start_str = line_numbers.first()["L".len..];
+        base_start = try std.fmt.parseUnsigned(usize, base_start_str, 10);
+        if (line_numbers.next()) |end_str| {
+            const base_end_str = switch (platform) {
+                .github, .codeberg => end_str["L".len..],
+                .gitlab => end_str,
+            };
+            base_end = try std.fmt.parseUnsigned(usize, base_end_str, 10);
+        } else {
+            base_end = base_start;
+        }
     }
 
     const base_sha = if (ref.len == 40)
@@ -810,7 +813,7 @@ fn updateChunk(
         base_sha,
         path,
     );
-    const base_bytes = try getLines(base_file.data, base_start, base_end);
+    const base_bytes = if (whole_file) base_file.data else try getLines(base_file.data, base_start, base_end);
 
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
@@ -859,8 +862,6 @@ fn updateChunk(
             else => unreachable,
         }
     } else {
-        new_start = 0;
-        new_end = 0;
         std.debug.assert(action == .track or (action == .get and ref.len == 40));
         const new_file = try fetchFile(
             allocator,
@@ -871,110 +872,113 @@ fn updateChunk(
             path,
         );
 
-        // Diff the files
+        const new_bytes = if (whole_file) new_file.data else new_bytes: {
+            new_start = 0;
+            new_end = 0;
 
-        var base_file_path_buffer: [1024]u8 = undefined;
-        var new_file_path_buffer: [1024]u8 = undefined;
-        const base_file_path = try ctx.cache_dir.realpath(base_file.name, &base_file_path_buffer);
-        const new_file_path = try ctx.cache_dir.realpath(new_file.name, &new_file_path_buffer);
+            // Diff the files
 
-        const diff_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "git", "diff", "--no-index", base_file_path, new_file_path },
-            .max_output_bytes = max_file_bytes,
-        });
+            var base_file_path_buffer: [1024]u8 = undefined;
+            var new_file_path_buffer: [1024]u8 = undefined;
+            const base_file_path = try ctx.cache_dir.realpath(base_file.name, &base_file_path_buffer);
+            const new_file_path = try ctx.cache_dir.realpath(new_file.name, &new_file_path_buffer);
 
-        // Check if diff is in the chunk
+            const diff_result = try std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{ "git", "diff", "--no-index", base_file_path, new_file_path },
+                .max_output_bytes = max_file_bytes,
+            });
 
-        var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
-        var base_line: usize = 0;
-        var new_line: usize = 0;
-        var base_range: GitRange = .{ .start = 0, .len = 0 };
-        var new_range: GitRange = .{ .start = 0, .len = 0 };
-        var has_diff_in_chunk = false;
-        var last_diff_delta: isize = 0;
+            // Check if diff is in the chunk
 
-        for (0..4) |_| _ = diff_lines.next(); // Skip diff header
+            var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
+            var base_line: usize = 0;
+            var new_line: usize = 0;
+            var base_range: GitRange = .{ .start = 0, .len = 0 };
+            var new_range: GitRange = .{ .start = 0, .len = 0 };
+            var has_diff_in_chunk = false;
+            var last_diff_delta: isize = 0;
 
-        while (diff_lines.next()) |diff_line| {
-            if (std.mem.startsWith(u8, diff_line, "@@")) {
-                std.debug.assert(base_line == base_range.start + base_range.len);
-                std.debug.assert(new_line == new_range.start + new_range.len);
-                var header_parts = std.mem.splitScalar(u8, diff_line, ' ');
-                _ = header_parts.next().?; // skip @@
-                base_range = try parseRange(header_parts.next().?);
-                new_range = try parseRange(header_parts.next().?);
-                base_line = base_range.start;
-                new_line = new_range.start;
-                last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
-                const base_range_end = base_range.start + base_range.len;
+            for (0..4) |_| _ = diff_lines.next(); // Skip diff header
 
-                if ((base_line <= base_start and base_end <= base_range_end) or
-                    (base_start <= base_line and base_range_end <= base_end) or
-                    (base_line < base_start and base_start < base_range_end) or
-                    (base_start < base_line and base_line < base_end))
-                {
-                    has_diff_in_chunk = true;
+            while (diff_lines.next()) |diff_line| {
+                if (std.mem.startsWith(u8, diff_line, "@@")) {
+                    std.debug.assert(base_line == base_range.start + base_range.len);
+                    std.debug.assert(new_line == new_range.start + new_range.len);
+                    var header_parts = std.mem.splitScalar(u8, diff_line, ' ');
+                    _ = header_parts.next().?; // skip @@
+                    base_range = try parseRange(header_parts.next().?);
+                    new_range = try parseRange(header_parts.next().?);
+                    base_line = base_range.start;
+                    new_line = new_range.start;
+                    last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
+                    const base_range_end = base_range.start + base_range.len;
+
+                    if ((base_line <= base_start and base_end <= base_range_end) or
+                        (base_start <= base_line and base_range_end <= base_end) or
+                        (base_line < base_start and base_start < base_range_end) or
+                        (base_start < base_line and base_line < base_end))
+                    {
+                        has_diff_in_chunk = true;
+                    }
+
+                    if (new_start == 0 and base_line > base_start) {
+                        const delta: usize = base_line - base_start;
+                        new_start = new_line - delta;
+                    }
+                    if (new_end == 0 and base_line > base_end) {
+                        const delta: usize = base_line - base_end;
+                        new_end = new_line - delta;
+                    }
+                } else if (std.mem.startsWith(u8, diff_line, "-")) {
+                    base_line += 1;
+                } else if (std.mem.startsWith(u8, diff_line, "+")) {
+                    new_line += 1;
+                } else {
+                    // Either it's a shared line or the last empty line of the diff
+                    std.debug.assert(std.mem.startsWith(u8, diff_line, " ") or diff_lines.peek() == null);
+                    base_line += 1;
+                    new_line += 1;
                 }
 
-                if (new_start == 0 and base_line > base_start) {
-                    const delta: usize = base_line - base_start;
-                    new_start = new_line - delta;
+                if (base_line == base_start and new_start == 0) {
+                    new_start = new_line;
                 }
-                if (new_end == 0 and base_line > base_end) {
-                    const delta: usize = base_line - base_end;
-                    new_end = new_line - delta;
+                if (base_line == base_end) {
+                    new_end = new_line;
+                } else if (base_line == base_end + 1) {
+                    // In case there's a series of '-' lines followed by a series of
+                    // '+' lines right at the end of the chunk, we want to capture
+                    // that, so we need this extra check.
+
+                    new_end = new_line - 1;
                 }
-            } else if (std.mem.startsWith(u8, diff_line, "-")) {
-                base_line += 1;
-            } else if (std.mem.startsWith(u8, diff_line, "+")) {
-                new_line += 1;
+            }
+
+            if (has_diff_in_chunk) {
+                // We've at least set the start because the diff affected the chunk
+                std.debug.assert(new_start != 0);
+
+                if (new_end == 0) {
+                    // The only diffs were before the end of this chunk
+                    std.debug.assert(base_line < base_end);
+                    const delta = @as(isize, @intCast(new_line)) - @as(isize, @intCast(base_line));
+                    new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
+                }
             } else {
-                // Either it's a shared line or the last empty line of the diff
-                std.debug.assert(std.mem.startsWith(u8, diff_line, " ") or diff_lines.peek() == null);
-                base_line += 1;
-                new_line += 1;
+                // None of the diffs affected the chunk
+
+                if (new_start == 0) {
+                    std.debug.assert(new_end == 0);
+                    new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
+                    new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
+                } else {
+                    std.debug.assert(new_end - new_start == base_end - base_start);
+                }
             }
 
-            if (base_line == base_start and new_start == 0) {
-                new_start = new_line;
-            }
-            if (base_line == base_end) {
-                new_end = new_line;
-            } else if (base_line == base_end + 1) {
-                // In case there's a series of '-' lines followed by a series of
-                // '+' lines right at the end of the chunk, we want to capture
-                // that, so we need this extra check.
-
-                new_end = new_line - 1;
-            }
-        }
-
-        if (has_diff_in_chunk) {
-            // We've at least set the start because the diff affected the chunk
-            std.debug.assert(new_start != 0);
-
-            if (new_end == 0) {
-                // The only diffs were before the end of this chunk
-                std.debug.assert(base_line < base_end);
-                const delta = @as(isize, @intCast(new_line)) - @as(isize, @intCast(base_line));
-                new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
-            }
-        } else {
-            // None of the diffs affected the chunk
-
-            if (new_start == 0) {
-                std.debug.assert(new_end == 0);
-                new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
-                new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
-            } else {
-                std.debug.assert(new_end - new_start == base_end - base_start);
-            }
-        }
-
-        // Write base and new files
-
-        const new_bytes = try getLines(new_file.data, new_start, new_end);
+            break :new_bytes try getLines(new_file.data, new_start, new_end);
+        };
         var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
         try matchIndent(
             allocator,
@@ -1129,10 +1133,16 @@ fn updateChunk(
     } else {
         commands = command;
     }
+    const line_fragment = if (whole_file)
+        ""
+    else switch (platform) {
+        .github, .codeberg => try std.fmt.allocPrint(allocator, "#L{d}-L{d}", .{ new_start, new_end }),
+        .gitlab => try std.fmt.allocPrint(allocator, "#L{d}-{d}", .{ new_start, new_end }),
+    };
     const updated_url = switch (platform) {
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
-            "{s} https://{s}/{s}/{s}/{s}/{s}#L{d}-L{d} {s}",
+            "{s} https://{s}/{s}/{s}/{s}/{s}{s} {s}",
             .{
                 prefix,
                 host,
@@ -1140,22 +1150,20 @@ fn updateChunk(
                 if (platform == .github) "blob" else "src/commit",
                 new_sha,
                 path_with_query,
-                new_start,
-                new_end,
+                line_fragment,
                 commands,
             },
         ),
         .gitlab => try std.fmt.allocPrint(
             allocator,
-            "{s} https://{s}/{s}/-/blob/{s}/{s}#L{d}-{d} {s}",
+            "{s} https://{s}/{s}/-/blob/{s}/{s}{s} {s}",
             .{
                 prefix,
                 host,
                 repo,
                 new_sha,
                 path_with_query,
-                new_start,
-                new_end,
+                line_fragment,
                 commands,
             },
         ),
