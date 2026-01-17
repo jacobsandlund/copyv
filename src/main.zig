@@ -387,7 +387,7 @@ fn updateFile(
         });
         const prefix = std.mem.trimRight(u8, prefix_result.stdout, &std.ascii.whitespace);
         const git_path = try std.fs.path.join(allocator, &.{ prefix, file_name });
-        std.debug.print("File has conflicts: {s}\n", .{git_path});
+        std.log.warn("File has conflicts: {s}\n", .{git_path});
     }
 }
 
@@ -813,7 +813,10 @@ fn updateChunk(
         base_sha,
         path,
     );
-    const base_bytes = if (whole_file) base_file.data else try getLines(base_file.data, base_start, base_end);
+    const base_bytes = if (whole_file)
+        removeFinalNewline(base_file.data)
+    else
+        try getLines(base_file.data, base_start, base_end);
 
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
@@ -872,7 +875,9 @@ fn updateChunk(
             path,
         );
 
-        const new_bytes = if (whole_file) new_file.data else new_bytes: {
+        const new_bytes = if (whole_file)
+            removeFinalNewline(new_file.data)
+        else new_bytes: {
             new_start = 0;
             new_end = 0;
 
@@ -1001,6 +1006,7 @@ fn updateChunk(
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
         } else {
+            std.log.debug("Merging file: {s}", .{file_name});
             std.debug.assert(action == .track);
             try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
@@ -1409,6 +1415,13 @@ fn fetchFile(
     }
     try cache_dir.writeFile(.{ .sub_path = name, .data = data });
     return .{ .name = name, .data = data };
+}
+
+fn removeFinalNewline(bytes: []const u8) []const u8 {
+    if (bytes.len > 0 and bytes[bytes.len - 1] == '\n') {
+        return bytes[0 .. bytes.len - 1];
+    }
+    return bytes;
 }
 
 fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
