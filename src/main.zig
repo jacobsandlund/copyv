@@ -98,6 +98,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".bash", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".bat", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "REM" }, .{ .line = "::" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".bib", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".bqn", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".bzl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".c", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".cc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
