@@ -248,6 +248,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".xhtml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".xml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".y", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .common_indent_width = 4, .default_indent_char = '\t' } },
+    .{ ".yy", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .common_indent_width = 4, .default_indent_char = '\t' } },
     .{ ".yaml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".yml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".yrl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
