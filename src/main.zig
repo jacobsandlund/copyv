@@ -1545,7 +1545,7 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
         shift_counts[file_type_info.common_indent_width] += 1;
 
         var last_indent: usize = 0;
-        var last_starting_char: u8 = 'A';
+        var last_line_content: []const u8 = "a";
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         indent.width = while (lines.next()) |line| {
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
@@ -1558,7 +1558,13 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
                     //   de-indent multiple blocks at once (e.g. Python, or Lisps).
                     // * Ignore shifts after lines starting with '*' and '-' that
                     //   might be part of a block comment bulleted list.
-                    if (shift > 0 and last_starting_char != '*' and last_starting_char != '-') {
+                    // * Ignore shifts after lines starting with `/*` since
+                    //   that is also probably part of a block comment.
+                    if (shift > 0 and
+                        last_line_content[0] != '*' and
+                        last_line_content[0] != '-' and
+                        !std.mem.startsWith(u8, last_line_content, "/*"))
+                    {
                         if (shift < shift_counts.len) {
                             const abs_shift = @abs(shift);
                             shift_counts[abs_shift] += 1;
@@ -1571,7 +1577,7 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
                     last_indent = index;
                 }
 
-                last_starting_char = line[index];
+                last_line_content = line[index..];
             }
         } else blk: {
             var shift: usize = 0;
