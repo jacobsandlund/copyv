@@ -138,6 +138,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".fsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".fsy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".fth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".g4", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".glsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".go", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 8, .default_indent_char = '\t' } },
     .{ ".gql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
