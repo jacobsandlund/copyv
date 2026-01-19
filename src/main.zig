@@ -1006,7 +1006,7 @@ fn updateChunk(
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
         } else {
-            std.log.debug("Merging file: {s}", .{file_name});
+            std.log.info("Merging file: {s}", .{file_name});
             std.debug.assert(action == .track);
             try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
