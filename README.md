@@ -13,7 +13,7 @@ cp zig-out/bin/copyv ~/.local/bin # or somewhere on your PATH
 
 ## Usage
 
-Instead of copying code from GitHub, select the desired lines, copy the URL, then add a `copyv:` comment in your code. (To get the URL, click the first line number, then shift-click the final. For markdown files, first switch to the Code tab instead of the Preview.)
+Instead of copying code from GitHub, copy the URL for a file, then add a `copyv: <URL>` comment in your code. If you want only certain lines, that works too (click the first line number, then shift-click the final--for markdown files, first switch to the Code tab instead of the Preview).
 
 For example, in your `~/.config/nvim/init.lua`, add:
 
