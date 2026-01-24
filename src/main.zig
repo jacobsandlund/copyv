@@ -91,7 +91,9 @@ const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#"
 const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".4th", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".R", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".adb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 3, .default_indent_char = ' ' } },
     .{ ".adoc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "////" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".ads", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 3, .default_indent_char = ' ' } },
     .{ ".am", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".asm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".awk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
