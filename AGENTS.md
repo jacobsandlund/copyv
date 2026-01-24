@@ -8,10 +8,9 @@ Version control for copy paste!
 
 ## Build & Commands
 
-* Build and test with: `zig build test`
 * Build and run with: `zig build run`
 
-Right now, use `zig build run` and check the diff of changes in `examples`.
+Right now, use `zig build run` and check the diff of changes in `examples` (except for minor changes like adding new `file_type_info_map` entries).
 
 ## Code
 
