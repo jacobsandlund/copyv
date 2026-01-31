@@ -222,7 +222,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".reds", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = ";;" }, .{ .line = ";--" }, .{ .paired = .{ .begin = "comment {", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = '\t' } },
     .{ ".rkt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .paired = .{ .begin = "#|", .end = "|#" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".rs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .line = "//!" }, .{ .paired = .{ .begin = "/**", .end = "*/" } }, .{ .paired = .{ .begin = "/*!", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".rst", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ".." }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".rst", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ".." }}, .common_indent_width = 3, .default_indent_char = ' ' } },
     .{ ".s", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
     .{ ".sass", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
     .{ ".scala", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
