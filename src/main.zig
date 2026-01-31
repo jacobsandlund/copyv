@@ -91,13 +91,13 @@ const FileTypeInfo = struct {
     indent: FileTypeIndent,
 };
 
-const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } };
+const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off };
 
 const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".4th", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".R", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".adb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 3, .char = ' ' } } } },
-    .{ ".adoc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "////" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".adoc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "////" } }, .indent = .off } },
     .{ ".ads", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 3, .char = ' ' } } } },
     .{ ".am", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".asm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
@@ -183,7 +183,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".ksh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".kt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".kts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
-    .{ ".latex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".latex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .off } },
     .{ ".lean", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/-", .end = "-/" } }, .{ .paired = .{ .begin = "/--", .end = "-/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".less", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".liquid", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{% comment %}", .end = "{% endcomment %}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
@@ -191,8 +191,8 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".lua", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "--[[", .end = "]]" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".mak", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
     .{ ".make", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
-    .{ ".markdown", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
-    .{ ".md", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".markdown", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .off } },
+    .{ ".md", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .off } },
     .{ ".mjs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".mk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
     .{ ".ml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
@@ -207,8 +207,8 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".pl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".pm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".pm6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
-    .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
-    .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off } },
+    .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off } },
     .{ ".properties", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "!" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".proto", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".proto3", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
@@ -245,7 +245,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".svg", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".swift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".tcsh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
-    .{ ".tex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".tex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .off } },
     .{ ".tf", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".tfvars", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".thrift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
