@@ -80,232 +80,237 @@ const Comment = union(enum) {
     },
 };
 
-const FileTypeInfo = struct {
-    comments: []const Comment,
-    common_indent_width: u8,
-    default_indent_char: u8, // ' ' or '\t'
+const FileTypeIndentDefault = struct { width: u8, char: u8 };
+const FileTypeIndent = union(enum) {
+    default: FileTypeIndentDefault,
+    off,
 };
 
-const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' };
+const FileTypeInfo = struct {
+    comments: []const Comment,
+    indent: FileTypeIndent,
+};
+
+const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } };
 
 const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
-    .{ ".4th", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".R", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".adb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 3, .default_indent_char = ' ' } },
-    .{ ".adoc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "////" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ads", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 3, .default_indent_char = ' ' } },
-    .{ ".am", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".asm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".awk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".bash", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".bas", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".bat", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "REM" }, .{ .line = "::" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".bib", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".bqn", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".bzl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".c", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cfg", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cjs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".clj", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cljc", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cljs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cls", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".cmake", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cmd", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "REM" }, .{ .line = "::" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".conf", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".containerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cpp", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".csh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cshtml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .paired = .{ .begin = "@*", .end = "*@" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".css", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "/*", .end = "*/" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".cxx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".dart", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".4th", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".R", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".adb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 3, .char = ' ' } } } },
+    .{ ".adoc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "////" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ads", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 3, .char = ' ' } } } },
+    .{ ".am", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".asm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".awk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".bash", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".bas", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".bat", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "REM" }, .{ .line = "::" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".bib", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".bqn", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".bzl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".c", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cfg", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cjs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".clj", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cljc", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cljs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cls", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".cmake", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cmd", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "REM" }, .{ .line = "::" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".conf", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".containerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cpp", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".csh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cshtml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .paired = .{ .begin = "@*", .end = "*@" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".css", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "/*", .end = "*/" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".cxx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".dart", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".dat", text_file_type_info },
-    .{ ".def", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".dockerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".editorconfig", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".edn", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ejs", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<%#", .end = "%>" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".el", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".elm", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } }, .{ .paired = .{ .begin = "{-|", .end = "-}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".env", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".erl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".ex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".exs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".factor", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "!" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".fish", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".forth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".frag", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".frm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".fs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".fsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".fsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".fsy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".fth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".g4", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".glsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".go", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ ".gql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".gradle", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".graphql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".groovy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".h", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".handlebars", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "{{!--", .end = "--}}" } }, .{ .paired = .{ .begin = "{{!", .end = "}}" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hbs", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "{{!--", .end = "--}}" } }, .{ .paired = .{ .begin = "{{!", .end = "}}" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hcl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hh", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hpp", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hxx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".hrl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".hs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } }, .{ .paired = .{ .begin = "{-|", .end = "-}" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".idr", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".htm", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".html", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".http", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ini", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".j2", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".java", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".jenkinsfile", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".jinja", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".jl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#=", .end = "=#" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".js", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".json", FileTypeInfo{ .comments = &[_]Comment{}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".json5", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".jsonc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".jsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ksh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".kt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".kts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".latex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".lean", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/-", .end = "-/" } }, .{ .paired = .{ .begin = "/--", .end = "-/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".less", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".liquid", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{% comment %}", .end = "{% endcomment %}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".lisp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".lua", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "--[[", .end = "]]" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".mak", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ ".make", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ ".markdown", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".md", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".mjs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".mk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ ".ml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".mli", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".mustache", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{{!", .end = "}}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".nginx", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".nim", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "##" }, .{ .paired = .{ .begin = "#[", .end = "]#" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".nix", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".nqp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".p6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".php", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".pl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".pm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".pm6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".properties", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "!" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".proto", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".proto3", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ps1", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "<#", .end = "#>" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".psm1", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "<#", .end = "#>" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".psql", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".purs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".py", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".r", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".rake", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".raku", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".rakumod", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".rakutest", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".rb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".red", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = ";;" }, .{ .line = ";--" }, .{ .paired = .{ .begin = "comment {", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = '\t' } },
-    .{ ".reds", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = ";;" }, .{ .line = ";--" }, .{ .paired = .{ .begin = "comment {", .end = "}" } } }, .common_indent_width = 4, .default_indent_char = '\t' } },
-    .{ ".rkt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .paired = .{ .begin = "#|", .end = "|#" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".rs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .line = "//!" }, .{ .paired = .{ .begin = "/**", .end = "*/" } }, .{ .paired = .{ .begin = "/*!", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".rst", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ".." }}, .common_indent_width = 3, .default_indent_char = ' ' } },
-    .{ ".s", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".sass", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".scala", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".scm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".scss", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".sed", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".service", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".sh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".smk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".sql", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".st", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "\"", .end = "\"" } }}, .common_indent_width = 4, .default_indent_char = '\t' } },
-    .{ ".styl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".sv", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".svelte", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".svg", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".swift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".tcsh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".tex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".tf", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".tfvars", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".thrift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".toml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".ts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".tsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".twig", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".def", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".dockerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".editorconfig", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".edn", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ejs", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<%#", .end = "%>" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".el", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".elm", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } }, .{ .paired = .{ .begin = "{-|", .end = "-}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".env", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".erl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".ex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".exs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".factor", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "!" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".fish", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".forth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".frag", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".frm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".fs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".fsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".fsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } }, .{ .line = "///" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".fsy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".fth", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "\\" }, .{ .paired = .{ .begin = "(", .end = ")" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".g4", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".glsl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".go", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ ".gql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".gradle", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".graphql", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".groovy", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".h", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".handlebars", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "{{!--", .end = "--}}" } }, .{ .paired = .{ .begin = "{{!", .end = "}}" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hbs", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "{{!--", .end = "--}}" } }, .{ .paired = .{ .begin = "{{!", .end = "}}" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hcl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hh", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hpp", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hxx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".hrl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".hs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } }, .{ .paired = .{ .begin = "{-|", .end = "-}" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".idr", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".htm", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".html", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".http", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ini", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".j2", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".java", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".jenkinsfile", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".jinja", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".jl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#=", .end = "=#" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".js", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".json", FileTypeInfo{ .comments = &[_]Comment{}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".json5", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".jsonc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".jsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ksh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".kt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".kts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".latex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".lean", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/-", .end = "-/" } }, .{ .paired = .{ .begin = "/--", .end = "-/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".less", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".liquid", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{% comment %}", .end = "{% endcomment %}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".lisp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".lua", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "--[[", .end = "]]" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".mak", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ ".make", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ ".markdown", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".md", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".mjs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".mk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ ".ml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".mli", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "(*", .end = "*)" } }, .{ .paired = .{ .begin = "(**", .end = "*)" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".mustache", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{{!", .end = "}}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".nginx", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".nim", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "##" }, .{ .paired = .{ .begin = "#[", .end = "]#" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".nix", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".nqp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".p6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".php", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".pl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".pm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".pm6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".properties", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "!" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".proto", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".proto3", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ps1", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "<#", .end = "#>" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".psm1", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "<#", .end = "#>" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".psql", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".purs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "{-", .end = "-}" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".py", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".r", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".rake", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".raku", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".rakumod", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".rakutest", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".rb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".red", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = ";;" }, .{ .line = ";--" }, .{ .paired = .{ .begin = "comment {", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = '\t' } } } },
+    .{ ".reds", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .line = ";;" }, .{ .line = ";--" }, .{ .paired = .{ .begin = "comment {", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = '\t' } } } },
+    .{ ".rkt", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = ";" }, .{ .paired = .{ .begin = "#|", .end = "|#" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".rs", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .line = "//!" }, .{ .paired = .{ .begin = "/**", .end = "*/" } }, .{ .paired = .{ .begin = "/*!", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".rst", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ".." }}, .indent = .off } },
+    .{ ".s", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".sass", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".scala", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".scm", FileTypeInfo{ .comments = &[_]Comment{.{ .line = ";" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".scss", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".sed", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".service", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = ";" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".sh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".smk", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".sql", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "--" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".st", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "\"", .end = "\"" } }}, .indent = .{ .default = .{ .width = 4, .char = '\t' } } } },
+    .{ ".styl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".sv", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".svelte", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".svg", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".swift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "///" }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".tcsh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".tex", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "%" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".tf", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".tfvars", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".thrift", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "#" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".toml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".ts", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".tsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".twig", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".txt", text_file_type_info },
-    .{ ".v", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".vb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".vba", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".vbhtml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .paired = .{ .begin = "@*", .end = "*@" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".vbs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".vert", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".vhd", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".vhdl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".vue", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".wgsl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "//" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".x", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".xaml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".xhtml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".xml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".y", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".yy", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".yaml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".yml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ ".yrl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".zig", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "///" }, .{ .line = "//!" } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ ".zsh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ ".v", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".vb", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".vba", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".vbhtml", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .paired = .{ .begin = "@*", .end = "*@" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".vbs", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "'" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".vert", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".vhd", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".vhdl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".vue", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "<!--", .end = "-->" } }, .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".wgsl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "//" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".x", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "--" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".xaml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".xhtml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".xml", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "<!--", .end = "-->" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".y", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".yy", FileTypeInfo{ .comments = &[_]Comment{ .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .line = "//" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".yaml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".yml", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".yrl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "%" }, .{ .line = "%%" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".zig", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "///" }, .{ .line = "//!" } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".zsh", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ "AUTHORS", text_file_type_info },
-    .{ "BSDmakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ "BUILD", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ "BSDmakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ "BUILD", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ "CHANGELOG", text_file_type_info },
     .{ "CHANGES", text_file_type_info },
     .{ "CONTRIBUTING", text_file_type_info },
     .{ "CONTRIBUTORS", text_file_type_info },
     .{ "COPYRIGHT", text_file_type_info },
-    .{ "Capfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "Containerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "Dockerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "Doxyfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "GNUMakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ "GNUmakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
-    .{ "Gemfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "Guardfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ "Capfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "Containerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "Dockerfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "Doxyfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "GNUMakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ "GNUmakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
+    .{ "Gemfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "Guardfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ "HISTORY", text_file_type_info },
-    .{ "Jenkinsfile", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ "Justfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ "Jenkinsfile", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ "Justfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ "LICENCE", text_file_type_info },
-    .{ "Makefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
+    .{ "Makefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
     .{ "NOTICE", text_file_type_info },
-    .{ "Podfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "Procfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
+    .{ "Podfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "Procfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ "README", text_file_type_info },
-    .{ "Rakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "SConscript", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ "SConstruct", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ "Rakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "SConscript", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ "SConstruct", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ "SECURITY", text_file_type_info },
-    .{ "Snakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
+    .{ "Snakefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ "TODO", text_file_type_info },
-    .{ "Tiltfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ "Vagrantfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "WORKSPACE", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 4, .default_indent_char = ' ' } },
-    .{ "justfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 2, .default_indent_char = ' ' } },
-    .{ "makefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .common_indent_width = 8, .default_indent_char = '\t' } },
+    .{ "Tiltfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ "Vagrantfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "WORKSPACE", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ "justfile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ "makefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
 });
 
 fn recursivelyUpdate(
@@ -355,7 +360,8 @@ fn updateFile(
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
     var settings: FileSettings = .{
         .current_indent = .{
-            .start = 0,
+            .enabled = file_type_info.indent != .off,
+            .start_width = 0,
         },
     };
 
@@ -431,8 +437,11 @@ const Match = struct {
 const Indent = struct {
     enabled: bool = true,
 
+    // The exact whitespace slice from column 0 to the start of the copyv comment
+    start_slice: []const u8 = "",
+
     // This is pre-multiplied with `width` (or even allows non-width aligned starting indents)
-    start: ?usize = null,
+    start_width: ?usize = null,
 
     width: ?usize = null,
     char: ?u8 = null, // ' ' or '\t'
@@ -468,19 +477,26 @@ fn matchesTag(
                 const tag_whitespace = tag.len - tag_trimmed.len;
                 const prefix_len = comment_start + comment_prefix.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
-                getIndent(file_indent, file_bytes, file_type_info);
+                if (file_indent.enabled) {
+                    getIndent(file_indent, file_bytes, file_type_info);
+                }
 
+                const start_slice = line[0..comment_start];
                 return .{
                     .prefix = prefix,
                     .indent = .{
                         .enabled = file_indent.enabled,
-                        .start = getIndentStart(
-                            line[0..comment_start],
-                            file_indent.width.?,
-                            file_indent.char.?,
-                        ),
-                        .width = file_indent.width.?,
-                        .char = file_indent.char.?,
+                        .start_slice = start_slice,
+                        .start_width = if (file_indent.enabled)
+                            getIndentStart(
+                                start_slice,
+                                file_indent.width.?,
+                                file_indent.char.?,
+                            )
+                        else
+                            null,
+                        .width = file_indent.width,
+                        .char = file_indent.char,
                     },
                     .comment = comment,
                 };
@@ -497,25 +513,7 @@ fn appendEndTag(
     indent: Indent,
     file_type_info: FileTypeInfo,
 ) !void {
-    var whitespace: []const u8 = undefined;
-
-    if (indent.char.? == ' ') {
-        whitespace = try getWhitespace(
-            allocator,
-            ' ',
-            indent.start.?,
-        );
-    } else {
-        const num_tabs = indent.start.? / indent.width.?;
-        const num_spaces = indent.start.? - indent.start.? % indent.width.?;
-        whitespace = try getMixedWhitespace(
-            allocator,
-            num_tabs,
-            num_spaces,
-        );
-    }
-
-    try updated_bytes.appendSlice(allocator, whitespace);
+    try updated_bytes.appendSlice(allocator, indent.start_slice);
 
     switch (file_type_info.comments[0]) {
         .line => |prefix| {
@@ -596,6 +594,8 @@ fn updateChunk(
                 &line_args,
                 &file_settings.current_indent,
                 true,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -605,6 +605,8 @@ fn updateChunk(
                 &line_args,
                 &file_settings.new_indent,
                 false,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -618,6 +620,8 @@ fn updateChunk(
                 &line_args,
                 &file_settings.base_indent,
                 false,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -689,6 +693,8 @@ fn updateChunk(
                 &line_args,
                 &indent,
                 true,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -697,6 +703,8 @@ fn updateChunk(
                 &line_args,
                 &new_indent,
                 false,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -709,6 +717,8 @@ fn updateChunk(
                 &line_args,
                 &base_indent,
                 false,
+                lines.buffer,
+                file_type_info,
                 file_name,
                 line_number.*,
             );
@@ -1094,9 +1104,10 @@ fn updateChunk(
     // Write back bytes
 
     const command = if (action == .get_freeze) "freeze" else "begin";
-    const indent_differs = indent.enabled != file_settings.current_indent.enabled or
-        indent.width.? != file_settings.current_indent.width.? or
-        indent.char.? != file_settings.current_indent.char.?;
+    const enabled_differs = indent.enabled != file_settings.current_indent.enabled;
+    const indent_differs = enabled_differs or (indent.enabled and
+        (indent.width.? != file_settings.current_indent.width.? or
+        indent.char.? != file_settings.current_indent.char.?));
     // We don't care if base indent differs, since we've already merged in the
     // new changes by now.
     const new_char_differs = new_indent.char != file_settings.base_indent.char;
@@ -1112,16 +1123,16 @@ fn updateChunk(
                 array.appendAssumeCapacity("indent");
             }
         }
-        if (indent.enabled != file_settings.current_indent.enabled) {
+        if (enabled_differs) {
             array.appendAssumeCapacity(if (indent.enabled) "on" else "off");
         }
-        if (indent.char.? != file_settings.current_indent.char.?) {
+        if (indent.enabled and indent.char.? != file_settings.current_indent.char.?) {
             array.appendAssumeCapacity(if (indent.char.? == ' ')
                 "spaces"
             else
                 "tabs");
         }
-        if (indent.width.? != file_settings.current_indent.width.?) {
+        if (indent.enabled and indent.width.? != file_settings.current_indent.width.?) {
             array.appendAssumeCapacity(try std.fmt.allocPrint(
                 allocator,
                 "{d}",
@@ -1214,6 +1225,8 @@ fn handleIndentCommands(
     args: *std.mem.SplitIterator(u8, .scalar),
     indent: *Indent,
     allow_enable_toggling: bool,
+    file_bytes: []const u8,
+    file_type_info: FileTypeInfo,
     file_name: []const u8,
     line_number: usize,
 ) void {
@@ -1241,7 +1254,10 @@ fn handleIndentCommands(
                         .{ file_name, line_number },
                     );
                 }
-                indent.enabled = true;
+                if (!indent.enabled) {
+                    indent.enabled = true;
+                    getIndent(indent, file_bytes, file_type_info);
+                }
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
             } else if (std.mem.eql(u8, peek, "space") or std.mem.eql(u8, peek, "spaces")) {
@@ -1472,7 +1488,7 @@ fn skipToEndLine(
         if (!mightMatchTag(line)) continue;
 
         const match = matchesTag(line, file_type_info, &file_indent, "");
-        if (match == null or match.?.indent.start.? != indent.start.?) continue;
+        if (match == null or match.?.indent.start_width != indent.start_width) continue;
 
         const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
         var line_args = std.mem.splitScalar(u8, line_payload, ' ');
@@ -1532,6 +1548,11 @@ fn getIndentStart(
 }
 
 fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) void {
+    const file_type_indent: FileTypeIndentDefault = switch (file_type_info.indent) {
+        .off => .{ .width = 2, .char = ' ' },
+        .default => |d| d,
+    };
+
     if (indent.char == null) {
         var space_count: usize = 0;
         var tab_count: usize = 0;
@@ -1555,24 +1576,24 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
                 if (tab_count > space_count) break :blk '\t';
                 if (space_count > tab_count) break :blk ' ';
             }
-            break :blk file_type_info.default_indent_char;
+            break :blk file_type_indent.char;
         };
     }
 
-    if (indent.start == null) {
+    if (indent.start_width == null) {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         lines = std.mem.splitScalar(u8, bytes, '\n');
-        indent.start = while (lines.next()) |line| {
+        indent.start_width = while (lines.next()) |line| {
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
             if (first_non_whitespace) |index| {
-                break getIndentStart(line[0..index], file_type_info.common_indent_width, indent.char.?);
+                break getIndentStart(line[0..index], file_type_indent.width, indent.char.?);
             }
         } else 0;
     }
 
     if (indent.width == null) {
         if (indent.char.? == '\t') {
-            indent.width = file_type_info.common_indent_width;
+            indent.width = file_type_indent.width;
             return;
         }
 
@@ -1581,7 +1602,7 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
         // bias shift counts towards expected indents as a prior
         shift_counts[2] = 1;
         shift_counts[4] = 1;
-        shift_counts[file_type_info.common_indent_width] += 1;
+        shift_counts[file_type_indent.width] += 1;
 
         var last_indent: usize = 0;
         var last_line_content: []const u8 = "a";
@@ -1677,10 +1698,10 @@ fn matchIndent(
     getIndent(&current, bytes, file_type_info);
 
     const current_width = current.width.?;
-    const current_start = current.start.?;
+    const current_start = current.start_width.?;
     const current_char = current.char.?;
     const desired_width = desired.width.?;
-    const desired_start = desired.start.?;
+    const desired_start = desired.start_width.?;
     const desired_char = desired.char.?;
 
     // Fast path for equal indents
