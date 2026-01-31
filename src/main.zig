@@ -535,6 +535,43 @@ const ChunkStatus = enum {
     not_a_chunk,
 };
 
+const FetchError = error{
+    HttpError,
+};
+
+fn skipBlockUntouched(
+    allocator: std.mem.Allocator,
+    action: Action,
+    updated_bytes: *std.ArrayList(u8),
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    current_line: []const u8,
+    indent: Indent,
+    file_type_info: FileTypeInfo,
+    file_name: []const u8,
+    line_number: *usize,
+) !ChunkStatus {
+    if (action == .track or action == .check_freeze) {
+        const current_start = current_line.ptr - lines.buffer.ptr;
+        const end_line = skipToEndLine(
+            lines,
+            indent,
+            file_type_info,
+            file_name,
+            line_number,
+        );
+        const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
+        try updated_bytes.appendSlice(
+            allocator,
+            lines.buffer[current_start..current_end],
+        );
+        try maybeAppendNewline(allocator, updated_bytes, lines);
+    } else {
+        try updated_bytes.appendSlice(allocator, current_line);
+        try maybeAppendNewline(allocator, updated_bytes, lines);
+    }
+    return .untouched;
+}
+
 fn updateChunk(
     allocator: std.mem.Allocator,
     ctx: GlobalContext,
@@ -778,27 +815,17 @@ fn updateChunk(
             );
         }
 
-        if (action == .track or action == .check_freeze) {
-            const current_start = current_line.ptr - lines.buffer.ptr;
-            const end_line = skipToEndLine(
-                lines,
-                indent,
-                file_type_info,
-                file_name,
-                line_number,
-            );
-            const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
-            try updated_bytes.appendSlice(
-                allocator,
-                lines.buffer[current_start..current_end],
-            );
-            try maybeAppendNewline(allocator, updated_bytes, lines);
-        } else {
-            try updated_bytes.appendSlice(allocator, current_line);
-            try maybeAppendNewline(allocator, updated_bytes, lines);
-        }
-
-        return .untouched;
+        return skipBlockUntouched(
+            allocator,
+            action,
+            updated_bytes,
+            lines,
+            current_line,
+            indent,
+            file_type_info,
+            file_name,
+            line_number,
+        );
     }
 
     const fragment_index = std.mem.indexOfScalar(u8, path_with_query_and_fragment, '#');
@@ -828,16 +855,42 @@ fn updateChunk(
     const base_sha = if (ref.len == 40)
         ref
     else
-        try fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, ref);
+        fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
+            FetchError.HttpError => return skipBlockUntouched(
+                allocator,
+                action,
+                updated_bytes,
+                lines,
+                current_line,
+                indent,
+                file_type_info,
+                file_name,
+                line_number,
+            ),
+            else => return err,
+        };
 
-    const base_file = try fetchFile(
+    const base_file = fetchFile(
         allocator,
         ctx.cache_dir,
         platform,
         repo,
         base_sha,
         path,
-    );
+    ) catch |err| switch (err) {
+        FetchError.HttpError => return skipBlockUntouched(
+            allocator,
+            action,
+            updated_bytes,
+            lines,
+            current_line,
+            indent,
+            file_type_info,
+            file_name,
+            line_number,
+        ),
+        else => return err,
+    };
     const base_bytes = if (whole_file)
         removeFinalNewline(base_file.data)
     else
@@ -870,7 +923,20 @@ fn updateChunk(
     const new_sha = if (action == .get_freeze)
         base_sha
     else
-        try fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, "HEAD");
+        fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
+            FetchError.HttpError => return skipBlockUntouched(
+                allocator,
+                action,
+                updated_bytes,
+                lines,
+                current_line,
+                indent,
+                file_type_info,
+                file_name,
+                line_number,
+            ),
+            else => return err,
+        };
 
     var new_start: usize = undefined;
     var new_end: usize = undefined;
@@ -891,14 +957,27 @@ fn updateChunk(
         }
     } else {
         std.debug.assert(action == .track or (action == .get and ref.len == 40));
-        const new_file = try fetchFile(
+        const new_file = fetchFile(
             allocator,
             ctx.cache_dir,
             platform,
             repo,
             new_sha,
             path,
-        );
+        ) catch |err| switch (err) {
+            FetchError.HttpError => return skipBlockUntouched(
+                allocator,
+                action,
+                updated_bytes,
+                lines,
+                current_line,
+                indent,
+                file_type_info,
+                file_name,
+                line_number,
+            ),
+            else => return err,
+        };
 
         const new_bytes = if (whole_file)
             removeFinalNewline(new_file.data)
@@ -1352,13 +1431,26 @@ fn fetchLatestCommitSha(
         },
     });
 
-    if (result.status == .forbidden or result.status == .too_many_requests) {
-        const platform_name = switch (platform) {
-            .github => "GitHub",
-            .gitlab => "GitLab",
-            .codeberg => "Codeberg",
-        };
-        std.debug.panic("{s} API rate limit exceeded. Try again later or authenticate.\n", .{platform_name});
+    const platform_name = switch (platform) {
+        .github => "GitHub",
+        .gitlab => "GitLab",
+        .codeberg => "Codeberg",
+    };
+
+    const status_code = @intFromEnum(result.status);
+    if (status_code >= 400) {
+        const json_bytes = aw.toOwnedSlice() catch "";
+        defer if (json_bytes.len > 0) allocator.free(json_bytes);
+        std.log.err("{s} API error fetching commit SHA for {s}/{s}: HTTP {d} ({s}){s}{s}", .{
+            platform_name,
+            repo,
+            ref,
+            status_code,
+            @tagName(result.status),
+            if (json_bytes.len > 0) ": " else "",
+            json_bytes,
+        });
+        return FetchError.HttpError;
     }
 
     const json_bytes = try aw.toOwnedSlice();
@@ -1373,12 +1465,14 @@ fn fetchLatestCommitSha(
     };
 
     const sha = parsed.value.object.get(sha_field_name) orelse {
-        const platform_name = switch (platform) {
-            .github => "GitHub",
-            .gitlab => "GitLab",
-            .codeberg => "Codeberg",
-        };
-        std.debug.panic("{s} API error (status {d}): {s}\n", .{ platform_name, @intFromEnum(result.status), json_bytes });
+        std.log.err("{s} API error: missing '{s}' field in response for {s}/{s}: {s}", .{
+            platform_name,
+            sha_field_name,
+            repo,
+            ref,
+            json_bytes,
+        });
+        return FetchError.HttpError;
     };
 
     const cache_allocator = sha_cache.allocator;
@@ -1436,8 +1530,14 @@ fn fetchFile(
         .response_writer = &aw.writer,
     });
 
-    if (result.status != .ok) {
-        std.debug.panic("Failed to fetch file from {s}: HTTP {d}\n", .{ url, @intFromEnum(result.status) });
+    const status_code = @intFromEnum(result.status);
+    if (status_code >= 400) {
+        std.log.err("Failed to fetch file from {s}: HTTP {d} ({s})", .{
+            url,
+            status_code,
+            @tagName(result.status),
+        });
+        return FetchError.HttpError;
     }
 
     const data = try aw.toOwnedSlice();

@@ -1,4 +1,4 @@
-# copyv: https://github.com/ghostty-org/ghostty/blob/9fb03ba55c9e53901193187d5c43341f5b1b430d/LICENSE begin
+# copyv: https://github.com/ghostty-org/ghostty/blob/89d3ad2bf3f870dd6f0d67363652daef8f9e2eb9/LICENSE begin
 MIT License
 
 Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
