@@ -462,6 +462,8 @@ fn matchesTag(
     file_type_info: FileTypeInfo,
     file_indent: *Indent,
     file_bytes: []const u8,
+    file_name: []const u8,
+    line_number: usize,
     debug_indent: bool,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
@@ -483,7 +485,7 @@ fn matchesTag(
                 var start_width: ?usize = null;
 
                 if (file_indent.enabled) {
-                    getIndent(file_indent, file_bytes, file_type_info, debug_indent);
+                    getIndent(file_indent, file_bytes, file_type_info, file_name, line_number, debug_indent);
                     const reason = getIndentStart(
                         &start_width,
                         start_slice,
@@ -491,7 +493,9 @@ fn matchesTag(
                         file_indent.char.?,
                     );
                     if (debug_indent) {
-                        std.log.info("indent start_width={d} ({s})", .{
+                        std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
+                            file_name,
+                            line_number,
                             start_width.?,
                             @tagName(reason),
                         });
@@ -598,6 +602,8 @@ fn updateChunk(
         file_type_info,
         &file_settings.current_indent,
         lines.buffer,
+        file_name,
+        line_number.*,
         ctx.debug_indent,
     );
 
@@ -920,6 +926,8 @@ fn updateChunk(
         indent,
         base_indent,
         file_type_info,
+        file_name,
+        line_number.*,
         ctx.debug_indent,
     );
 
@@ -1113,6 +1121,8 @@ fn updateChunk(
             indent,
             new_indent,
             file_type_info,
+            file_name,
+            line_number.*,
             ctx.debug_indent,
         );
 
@@ -1128,7 +1138,7 @@ fn updateChunk(
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
         } else {
-            std.log.info("Merging file: {s}", .{file_name});
+            std.log.info("Merging file: {s}[{d}]", .{ file_name, line_number.* });
             std.debug.assert(action == .track);
             try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
@@ -1204,7 +1214,7 @@ fn updateChunk(
     const enabled_differs = indent.enabled != file_settings.current_indent.enabled;
     const indent_differs = enabled_differs or (indent.enabled and
         (indent.width.? != file_settings.current_indent.width.? or
-        indent.char.? != file_settings.current_indent.char.?));
+            indent.char.? != file_settings.current_indent.char.?));
     // We don't care if base indent differs, since we've already merged in the
     // new changes by now.
     const new_char_differs = new_indent.char != file_settings.base_indent.char;
@@ -1354,7 +1364,7 @@ fn handleIndentCommands(
                 }
                 if (!indent.enabled) {
                     indent.enabled = true;
-                    getIndent(indent, file_bytes, file_type_info, debug_indent);
+                    getIndent(indent, file_bytes, file_type_info, file_name, line_number, debug_indent);
                 }
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
@@ -1606,7 +1616,7 @@ fn skipToEndLine(
     return while (lines.next()) |line| : (line_number.* += 1) {
         if (!mightMatchTag(line)) continue;
 
-        const match = matchesTag(line, file_type_info, &file_indent, "", false);
+        const match = matchesTag(line, file_type_info, &file_indent, "", file_name, line_number.*, false);
         if (match == null or !std.mem.eql(u8, match.?.indent.start_slice, indent.start_slice)) continue;
 
         const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
@@ -1671,7 +1681,7 @@ fn getIndentStart(
     }
 }
 
-fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, debug: bool) void {
+fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, file_name: []const u8, line_number: usize, debug: bool) void {
     const file_type_indent: FileTypeIndentDefault = switch (file_type_info.indent) {
         .off => .{ .width = 2, .char = ' ' },
         .default => |d| d,
@@ -1712,7 +1722,9 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, d
 
         if (debug) {
             const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
-            std.log.info("indent char={s} ({s}, spaces={d}, tabs={d})", .{
+            std.log.info("{s}[{d}]: indent char={s} ({s}, spaces={d}, tabs={d})", .{
+                file_name,
+                line_number,
                 char_str,
                 @tagName(reason),
                 space_count,
@@ -1734,7 +1746,9 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, d
         };
 
         if (debug) {
-            std.log.info("indent start_width={d} ({s})", .{
+            std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
+                file_name,
+                line_number,
                 indent.start_width.?,
                 @tagName(reason),
             });
@@ -1806,7 +1820,9 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, d
         }
 
         if (debug) {
-            std.log.info("indent width={d} ({s}, shift_counts={any})", .{
+            std.log.info("{s}[{d}]: indent width={d} ({s}, shift_counts={any})", .{
+                file_name,
+                line_number,
                 indent.width.?,
                 @tagName(reason),
                 shift_counts,
@@ -1849,6 +1865,8 @@ fn matchIndent(
     desired: Indent,
     current_override: Indent,
     file_type_info: FileTypeInfo,
+    file_name: []const u8,
+    line_number: usize,
     debug_indent: bool,
 ) !void {
     if (!desired.enabled) {
@@ -1857,7 +1875,7 @@ fn matchIndent(
     }
 
     var current = current_override;
-    getIndent(&current, bytes, file_type_info, debug_indent);
+    getIndent(&current, bytes, file_type_info, file_name, line_number, debug_indent);
 
     const current_width = current.width.?;
     const current_start = current.start_width.?;
