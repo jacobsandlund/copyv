@@ -50,6 +50,7 @@ const GlobalContext = struct {
     cache_dir: std.fs.Dir,
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
+    debug_indent: bool = false,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -461,6 +462,7 @@ fn matchesTag(
     file_type_info: FileTypeInfo,
     file_indent: *Indent,
     file_bytes: []const u8,
+    debug_indent: bool,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
     for (file_type_info.comments) |comment| {
@@ -477,24 +479,31 @@ fn matchesTag(
                 const tag_whitespace = tag.len - tag_trimmed.len;
                 const prefix_len = comment_start + comment_prefix.len + tag_whitespace + copyv_tag.len;
                 const prefix = line[0..prefix_len];
+                const start_slice = line[0..comment_start];
+                var start_width: ?usize = null;
+
                 if (file_indent.enabled) {
-                    getIndent(file_indent, file_bytes, file_type_info);
+                    getIndent(file_indent, file_bytes, file_type_info, debug_indent);
+                    const reason = getIndentStart(
+                        &start_width,
+                        start_slice,
+                        file_indent.width.?,
+                        file_indent.char.?,
+                    );
+                    if (debug_indent) {
+                        std.log.info("indent start_width={d} ({s})", .{
+                            start_width.?,
+                            @tagName(reason),
+                        });
+                    }
                 }
 
-                const start_slice = line[0..comment_start];
                 return .{
                     .prefix = prefix,
                     .indent = .{
                         .enabled = file_indent.enabled,
                         .start_slice = start_slice,
-                        .start_width = if (file_indent.enabled)
-                            getIndentStart(
-                                start_slice,
-                                file_indent.width.?,
-                                file_indent.char.?,
-                            )
-                        else
-                            null,
+                        .start_width = start_width,
                         .width = file_indent.width,
                         .char = file_indent.char,
                     },
@@ -589,6 +598,7 @@ fn updateChunk(
         file_type_info,
         &file_settings.current_indent,
         lines.buffer,
+        ctx.debug_indent,
     );
 
     if (maybe_match == null) {
@@ -635,6 +645,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
         } else if (std.mem.eql(u8, arg, "their-indent")) {
             has_command = true;
@@ -646,6 +657,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &file_settings.base_indent,
@@ -661,6 +673,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &file_settings.new_indent,
@@ -734,6 +747,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
         } else if (std.mem.eql(u8, command, "their-indent")) {
             handleIndentCommands(
@@ -744,6 +758,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &base_indent,
@@ -758,6 +773,7 @@ fn updateChunk(
                 file_type_info,
                 file_name,
                 line_number.*,
+                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &new_indent,
@@ -904,6 +920,7 @@ fn updateChunk(
         indent,
         base_indent,
         file_type_info,
+        ctx.debug_indent,
     );
 
     var current_chunk: []const u8 = undefined;
@@ -1096,6 +1113,7 @@ fn updateChunk(
             indent,
             new_indent,
             file_type_info,
+            ctx.debug_indent,
         );
 
         try ctx.cache_dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
@@ -1308,6 +1326,7 @@ fn handleIndentCommands(
     file_type_info: FileTypeInfo,
     file_name: []const u8,
     line_number: usize,
+    debug_indent: bool,
 ) void {
     if (args.peek() == null) {
         std.debug.panic(
@@ -1335,7 +1354,7 @@ fn handleIndentCommands(
                 }
                 if (!indent.enabled) {
                     indent.enabled = true;
-                    getIndent(indent, file_bytes, file_type_info);
+                    getIndent(indent, file_bytes, file_type_info, debug_indent);
                 }
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
@@ -1629,13 +1648,17 @@ const indent_char_count_threshold = 10;
 const indent_char_count_min = 4;
 const max_indent_width = 16;
 
+const StartWidthReason = enum { spaces, mixed, no_content };
+
 fn getIndentStart(
+    start_width: *?usize,
     whitespace: []const u8,
     file_type_common_indent: usize,
     indent_char: u8,
-) usize {
+) StartWidthReason {
     if (indent_char == ' ') {
-        return whitespace.len;
+        start_width.* = whitespace.len;
+        return .spaces;
     } else {
         const tab_count = std.mem.count(u8, whitespace, "\t");
         const space_count = std.mem.count(u8, whitespace, " ");
@@ -1643,17 +1666,21 @@ fn getIndentStart(
         // Note: this does not consider spaces that have no impact on
         // the indentation because they are followed by tabs, but for
         // well-formed whitespace, that shouldn't be the case.
-        return tab_count * file_type_common_indent + space_count;
+        start_width.* = tab_count * file_type_common_indent + space_count;
+        return .mixed;
     }
 }
 
-fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) void {
+fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, debug: bool) void {
     const file_type_indent: FileTypeIndentDefault = switch (file_type_info.indent) {
         .off => .{ .width = 2, .char = ' ' },
         .default => |d| d,
     };
 
     if (indent.char == null) {
+        const CharReason = enum { threshold, majority, file_type_default };
+        var reason: CharReason = undefined;
+
         var space_count: usize = 0;
         var tab_count: usize = 0;
 
@@ -1662,95 +1689,129 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo) v
             if (std.mem.startsWith(u8, line, " ")) {
                 space_count += 1;
                 if (space_count >= indent_char_count_threshold) {
+                    reason = .threshold;
                     break ' ';
                 }
             } else if (std.mem.startsWith(u8, line, "\t")) {
                 tab_count += 1;
                 if (tab_count >= indent_char_count_threshold) {
+                    reason = .threshold;
                     break '\t';
                 }
             }
         } else blk: {
             const seen = tab_count + space_count;
             if (seen >= indent_char_count_min) {
+                reason = .majority;
                 if (tab_count > space_count) break :blk '\t';
                 if (space_count > tab_count) break :blk ' ';
             }
+            reason = .file_type_default;
             break :blk file_type_indent.char;
         };
+
+        if (debug) {
+            const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
+            std.log.info("indent char={s} ({s}, spaces={d}, tabs={d})", .{
+                char_str,
+                @tagName(reason),
+                space_count,
+                tab_count,
+            });
+        }
     }
 
     if (indent.start_width == null) {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
-        lines = std.mem.splitScalar(u8, bytes, '\n');
-        indent.start_width = while (lines.next()) |line| {
+        const reason: StartWidthReason = while (lines.next()) |line| {
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
             if (first_non_whitespace) |index| {
-                break getIndentStart(line[0..index], file_type_indent.width, indent.char.?);
+                break getIndentStart(&indent.start_width, line[0..index], file_type_indent.width, indent.char.?);
             }
-        } else 0;
+        } else blk: {
+            indent.start_width = 0;
+            break :blk .no_content;
+        };
+
+        if (debug) {
+            std.log.info("indent start_width={d} ({s})", .{
+                indent.start_width.?,
+                @tagName(reason),
+            });
+        }
     }
 
     if (indent.width == null) {
-        if (indent.char.? == '\t') {
-            indent.width = file_type_indent.width;
-            return;
-        }
-
+        const WidthReason = enum { tab_file_type_default, threshold, max_count };
+        var reason: WidthReason = undefined;
         var shift_counts: [max_indent_width]usize = @splat(0);
 
-        // bias shift counts towards expected indents as a prior
-        shift_counts[2] = 1;
-        shift_counts[4] = 1;
-        shift_counts[file_type_indent.width] += 1;
+        if (indent.char.? == '\t') {
+            indent.width = file_type_indent.width;
+            reason = .tab_file_type_default;
+        } else {
+            // bias shift counts towards expected indents as a prior
+            shift_counts[2] = 1;
+            shift_counts[4] = 1;
+            shift_counts[file_type_indent.width] += 1;
 
-        var last_indent: usize = 0;
-        var last_line_content: []const u8 = "a";
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
-        indent.width = while (lines.next()) |line| {
-            const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
-            if (first_non_whitespace) |index| {
-                if (index != last_indent) {
-                    const shift = @as(isize, @intCast(index)) -
-                        @as(isize, @intCast(last_indent));
+            var last_indent: usize = 0;
+            var last_line_content: []const u8 = "a";
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+            indent.width = while (lines.next()) |line| {
+                const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
+                if (first_non_whitespace) |index| {
+                    if (index != last_indent) {
+                        const shift = @as(isize, @intCast(index)) -
+                            @as(isize, @intCast(last_indent));
 
-                    // * Ignore de-indent shifts, since some languages can
-                    //   de-indent multiple blocks at once (e.g. Python, or Lisps).
-                    // * Ignore shifts after lines starting with '*' and '-' that
-                    //   might be part of a block comment bulleted list.
-                    // * Ignore shifts after lines starting with `/*` since
-                    //   that is also probably part of a block comment.
-                    if (shift > 0 and
-                        last_line_content[0] != '*' and
-                        last_line_content[0] != '-' and
-                        !std.mem.startsWith(u8, last_line_content, "/*"))
-                    {
-                        if (shift < shift_counts.len) {
-                            const abs_shift = @abs(shift);
-                            shift_counts[abs_shift] += 1;
-                            if (shift_counts[abs_shift] >= shift_count_threshold) {
-                                break abs_shift;
+                        // * Ignore de-indent shifts, since some languages can
+                        //   de-indent multiple blocks at once (e.g. Python, or Lisps).
+                        // * Ignore shifts after lines starting with '*' and '-' that
+                        //   might be part of a block comment bulleted list.
+                        // * Ignore shifts after lines starting with `/*` since
+                        //   that is also probably part of a block comment.
+                        if (shift > 0 and
+                            last_line_content[0] != '*' and
+                            last_line_content[0] != '-' and
+                            !std.mem.startsWith(u8, last_line_content, "/*"))
+                        {
+                            if (shift < shift_counts.len) {
+                                const abs_shift = @abs(shift);
+                                shift_counts[abs_shift] += 1;
+                                if (shift_counts[abs_shift] >= shift_count_threshold) {
+                                    reason = .threshold;
+                                    break abs_shift;
+                                }
                             }
                         }
+
+                        last_indent = index;
                     }
 
-                    last_indent = index;
+                    last_line_content = line[index..];
                 }
-
-                last_line_content = line[index..];
-            }
-        } else blk: {
-            var shift: usize = 0;
-            var max_count: usize = 0;
-            for (shift_counts, 0..) |count, i| {
-                if (count > max_count) {
-                    max_count = count;
-                    shift = i;
+            } else blk: {
+                var shift: usize = 0;
+                var max_count: usize = 0;
+                for (shift_counts, 0..) |count, i| {
+                    if (count > max_count) {
+                        max_count = count;
+                        shift = i;
+                    }
                 }
-            }
+                reason = .max_count;
+                break :blk shift;
+            };
+        }
 
-            break :blk shift;
-        };
+        if (debug) {
+            std.log.info("indent width={d} ({s}, shift_counts={any})", .{
+                indent.width.?,
+                @tagName(reason),
+                shift_counts,
+            });
+        }
     }
 }
 
@@ -1788,6 +1849,7 @@ fn matchIndent(
     desired: Indent,
     current_override: Indent,
     file_type_info: FileTypeInfo,
+    debug_indent: bool,
 ) !void {
     if (!desired.enabled) {
         try updated_bytes.appendSlice(allocator, bytes);
@@ -1795,7 +1857,7 @@ fn matchIndent(
     }
 
     var current = current_override;
-    getIndent(&current, bytes, file_type_info);
+    getIndent(&current, bytes, file_type_info, debug_indent);
 
     const current_width = current.width.?;
     const current_start = current.start_width.?;
@@ -1960,6 +2022,7 @@ pub fn main() !void {
     var blacklist = PlatformFilter.blacklist_default;
     var whitelist = PlatformFilter.whitelist_default;
     var current_filter: *PlatformFilter = &blacklist;
+    var debug_indent = false;
     var name: []const u8 = ".";
     var kind: std.fs.File.Kind = .directory;
 
@@ -1981,6 +2044,8 @@ pub fn main() !void {
                 std.debug.panic("Unknown platform: {s}\n", .{host});
             };
             current_filter.setPlatform(platform, enable);
+        } else if (std.mem.eql(u8, arg, "--debug-indent")) {
+            debug_indent = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
@@ -1996,6 +2061,7 @@ pub fn main() !void {
         .cache_dir = cache_dir,
         .sha_cache = &sha_cache,
         .platform_filter = current_filter.*,
+        .debug_indent = debug_indent,
     };
 
     try recursivelyUpdate(ctx, std.fs.cwd(), name, kind);
