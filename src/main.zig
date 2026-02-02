@@ -1587,8 +1587,8 @@ fn skipToEndLine(
     return while (lines.next()) |line| : (line_number.* += 1) {
         if (!mightMatchTag(line)) continue;
 
-        const match = matchesTag(line, file_type_info, &file_indent, "");
-        if (match == null or match.?.indent.start_width != indent.start_width) continue;
+        const match = matchesTag(line, file_type_info, &file_indent, "", false);
+        if (match == null or !std.mem.eql(u8, match.?.indent.start_slice, indent.start_slice)) continue;
 
         const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
         var line_args = std.mem.splitScalar(u8, line_payload, ' ');
