@@ -92,6 +92,41 @@ const FileTypeInfo = struct {
     indent: FileTypeIndent,
 };
 
+const Match = struct {
+    prefix: []const u8,
+    indent: Indent,
+    comment: Comment,
+};
+
+const Indent = struct {
+    enabled: bool = true,
+
+    // The exact whitespace slice from column 0 to the start of the copyv comment
+    start_slice: []const u8 = "",
+
+    // This is pre-multiplied with `width` (or even allows non-width aligned starting indents)
+    start_width: ?usize = null,
+
+    width: ?usize = null,
+    char: ?u8 = null, // ' ' or '\t'
+};
+
+const FileSettings = struct {
+    freeze: bool = false,
+    current_indent: Indent = .{},
+    base_indent: Indent = .{},
+    new_indent: Indent = .{},
+};
+
+const FileContext = struct {
+    name: []const u8,
+    bytes: []const u8,
+    type_info: FileTypeInfo,
+    line_number: usize,
+    settings: FileSettings,
+    debug_indent: bool,
+};
+
 const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off };
 
 const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
@@ -354,30 +389,33 @@ fn updateFile(
     const bytes = try reader.allocRemaining(allocator, .unlimited);
     file.close();
     var lines = std.mem.splitScalar(u8, bytes, '\n');
-    var line_number: usize = 1;
     var has_update = false;
     var has_conflicts = false;
 
     var updated_bytes = try std.ArrayList(u8).initCapacity(allocator, bytes.len + 1024);
-    var settings: FileSettings = .{
-        .current_indent = .{
-            .enabled = file_type_info.indent != .off,
-            .start_width = 0,
+    var fc = FileContext{
+        .name = file_name,
+        .bytes = bytes,
+        .type_info = file_type_info,
+        .line_number = 1,
+        .settings = .{
+            .current_indent = .{
+                .enabled = file_type_info.indent != .off,
+                .start_width = 0,
+            },
         },
+        .debug_indent = ctx.debug_indent,
     };
 
-    while (lines.next()) |line| : (line_number += 1) {
+    while (lines.next()) |line| : (fc.line_number += 1) {
         if (mightMatchTag(line)) {
             switch (try updateChunk(
                 allocator,
                 ctx,
-                file_name,
-                &line_number,
+                &fc,
                 &updated_bytes,
                 &lines,
                 line,
-                file_type_info,
-                &settings,
             )) {
                 .updated => {
                     has_update = true;
@@ -429,45 +467,15 @@ fn mightMatchTag(line: []const u8) bool {
     return std.mem.indexOf(u8, line, copyv_tag) != null;
 }
 
-const Match = struct {
-    prefix: []const u8,
-    indent: Indent,
-    comment: Comment,
-};
-
-const Indent = struct {
-    enabled: bool = true,
-
-    // The exact whitespace slice from column 0 to the start of the copyv comment
-    start_slice: []const u8 = "",
-
-    // This is pre-multiplied with `width` (or even allows non-width aligned starting indents)
-    start_width: ?usize = null,
-
-    width: ?usize = null,
-    char: ?u8 = null, // ' ' or '\t'
-};
-
-const FileSettings = struct {
-    freeze: bool = false,
-    current_indent: Indent = .{},
-    base_indent: Indent = .{},
-    new_indent: Indent = .{},
-};
-
 const line_whitespace = " \t";
 
 fn matchesTag(
+    fc: *const FileContext,
     line: []const u8,
-    file_type_info: FileTypeInfo,
     file_indent: *Indent,
-    file_bytes: []const u8,
-    file_name: []const u8,
-    line_number: usize,
-    debug_indent: bool,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
-    for (file_type_info.comments) |comment| {
+    for (fc.type_info.comments) |comment| {
         const comment_prefix = switch (comment) {
             .line => |prefix| prefix,
             .paired => |p| p.begin,
@@ -485,17 +493,17 @@ fn matchesTag(
                 var start_width: ?usize = null;
 
                 if (file_indent.enabled) {
-                    getIndent(file_indent, file_bytes, file_type_info, file_name, line_number, debug_indent);
+                    getIndent(fc, file_indent, fc.bytes);
                     const reason = getIndentStart(
                         &start_width,
                         start_slice,
                         file_indent.width.?,
                         file_indent.char.?,
                     );
-                    if (debug_indent) {
+                    if (fc.debug_indent) {
                         std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
-                            file_name,
-                            line_number,
+                            fc.name,
+                            fc.line_number,
                             start_width.?,
                             @tagName(reason),
                         });
@@ -554,23 +562,19 @@ const FetchError = error{
 
 fn skipBlockUntouched(
     allocator: std.mem.Allocator,
+    fc: *FileContext,
     action: Action,
     updated_bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     indent: Indent,
-    file_type_info: FileTypeInfo,
-    file_name: []const u8,
-    line_number: *usize,
 ) !ChunkStatus {
     if (action == .track or action == .check_freeze) {
         const current_start = current_line.ptr - lines.buffer.ptr;
         const end_line = skipToEndLine(
+            fc,
             lines,
             indent,
-            file_type_info,
-            file_name,
-            line_number,
         );
         const current_end = end_line.ptr - lines.buffer.ptr + end_line.len;
         try updated_bytes.appendSlice(
@@ -588,23 +592,16 @@ fn skipBlockUntouched(
 fn updateChunk(
     allocator: std.mem.Allocator,
     ctx: GlobalContext,
-    file_name: []const u8,
-    line_number: *usize,
+    fc: *FileContext,
     updated_bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
-    file_type_info: FileTypeInfo,
-    file_settings: *FileSettings,
 ) !ChunkStatus {
     // Check if matches tag
     const maybe_match = matchesTag(
+        fc,
         current_line,
-        file_type_info,
-        &file_settings.current_indent,
-        lines.buffer,
-        file_name,
-        line_number.*,
-        ctx.debug_indent,
+        &fc.settings.current_indent,
     );
 
     if (maybe_match == null) {
@@ -614,8 +611,8 @@ fn updateChunk(
     const match = maybe_match.?;
     const prefix = match.prefix;
     var indent: Indent = match.indent;
-    var base_indent: Indent = file_settings.base_indent;
-    var new_indent: Indent = file_settings.new_indent;
+    var base_indent: Indent = fc.settings.base_indent;
+    var new_indent: Indent = fc.settings.new_indent;
 
     // Get the files from remote
 
@@ -639,60 +636,48 @@ fn updateChunk(
         if (std.mem.eql(u8, arg, "end")) {
             std.debug.panic(
                 "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
-                .{ file_name, line_number.* },
+                .{ fc.name, fc.line_number },
             );
         } else if (std.mem.eql(u8, arg, "indent") or std.mem.eql(u8, arg, "our-indent")) {
             has_command = true;
             handleIndentCommands(
+                fc,
                 &line_args,
-                &file_settings.current_indent,
+                &fc.settings.current_indent,
                 true,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
         } else if (std.mem.eql(u8, arg, "their-indent")) {
             has_command = true;
             handleIndentCommands(
+                fc,
                 &line_args,
-                &file_settings.new_indent,
+                &fc.settings.new_indent,
                 false,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
             copyIndentAsDefault(
-                &file_settings.base_indent,
-                file_settings.new_indent,
+                &fc.settings.base_indent,
+                fc.settings.new_indent,
             );
         } else if (std.mem.eql(u8, arg, "base-indent")) {
             has_command = true;
             handleIndentCommands(
+                fc,
                 &line_args,
-                &file_settings.base_indent,
+                &fc.settings.base_indent,
                 false,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
             copyIndentAsDefault(
-                &file_settings.new_indent,
-                file_settings.base_indent,
+                &fc.settings.new_indent,
+                fc.settings.base_indent,
             );
         } else if (std.mem.eql(u8, arg, "freeze") or std.mem.eql(u8, arg, "frozen")) {
             has_command = true;
-            file_settings.freeze = true;
+            fc.settings.freeze = true;
         } else if (std.mem.startsWith(u8, arg, "https://")) {
             if (has_command) {
                 std.debug.panic(
                     "{s}[{d}]: Unexpected URL after command. Command must either follow URL (applies only to that block), or be on a separate line (applies to all following blocks in the file)\n",
-                    .{ file_name, line_number.* },
+                    .{ fc.name, fc.line_number },
                 );
             }
 
@@ -702,7 +687,7 @@ fn updateChunk(
         } else if (arg.len > 0) {
             std.debug.panic(
                 "{s}[{d}]: Expected a valid command or a URL beginning with https:// after 'copyv:', got: {s}",
-                .{ file_name, line_number.*, arg },
+                .{ fc.name, fc.line_number, arg },
             );
         }
     }
@@ -710,7 +695,7 @@ fn updateChunk(
     if (!has_command and !has_url) {
         std.debug.panic(
             "{s}[{d}]: Expected a command or a URL beginning with https:// after 'copyv:'",
-            .{ file_name, line_number.* },
+            .{ fc.name, fc.line_number },
         );
     }
 
@@ -746,25 +731,17 @@ fn updateChunk(
             }
         } else if (std.mem.eql(u8, command, "indent") or std.mem.eql(u8, command, "our-indent")) {
             handleIndentCommands(
+                fc,
                 &line_args,
                 &indent,
                 true,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
         } else if (std.mem.eql(u8, command, "their-indent")) {
             handleIndentCommands(
+                fc,
                 &line_args,
                 &new_indent,
                 false,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &base_indent,
@@ -772,14 +749,10 @@ fn updateChunk(
             );
         } else if (std.mem.eql(u8, command, "base-indent")) {
             handleIndentCommands(
+                fc,
                 &line_args,
                 &base_indent,
                 false,
-                lines.buffer,
-                file_type_info,
-                file_name,
-                line_number.*,
-                ctx.debug_indent,
             );
             copyIndentAsDefault(
                 &new_indent,
@@ -787,29 +760,29 @@ fn updateChunk(
             );
         } else if (command.len > 0) {
             std.debug.panic("{s}[{d}]: Unknown command: {s}\n", .{
-                file_name,
-                line_number.*,
+                fc.name,
+                fc.line_number,
                 command,
             });
         }
     }
 
-    const action: Action = if (file_settings.freeze)
+    const action: Action = if (fc.settings.freeze)
         .check_freeze
     else
         chunk_action;
 
     const after_protocol = url_with_line_numbers["https://".len..];
     const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
-        std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ file_name, line_number.* });
+        std.debug.panic("{s}[{d}]: URL must contain path after host\n", .{ fc.name, fc.line_number });
     };
     const host = after_protocol[0..host_end];
     const url_path = after_protocol[host_end + 1 ..]; // strip leading '/'
 
     const platform = Platform.parse(host) catch {
         std.debug.panic("{s}[{d}]: Unsupported host: {s}\n", .{
-            file_name,
-            line_number.*,
+            fc.name,
+            fc.line_number,
             host,
         });
     };
@@ -820,7 +793,7 @@ fn updateChunk(
         .codeberg => "/src/",
     };
     const marker_index = std.mem.indexOf(u8, url_path, marker) orelse {
-        std.debug.panic("{s}[{d}]: URL must contain {s}\n", .{ file_name, line_number.*, marker });
+        std.debug.panic("{s}[{d}]: URL must contain {s}\n", .{ fc.name, fc.line_number, marker });
     };
     const repo = url_path[0..marker_index];
     const after_marker = url_path[marker_index + marker.len ..];
@@ -833,20 +806,18 @@ fn updateChunk(
         if (ctx.platform_filter.isEnabled(platform) and ref.len != 40) {
             std.debug.panic(
                 "{s}[{d}]: 'freeze' line must point to a commit SHA\n",
-                .{ file_name, line_number.* },
+                .{ fc.name, fc.line_number },
             );
         }
 
         return skipBlockUntouched(
             allocator,
+            fc,
             action,
             updated_bytes,
             lines,
             current_line,
             indent,
-            file_type_info,
-            file_name,
-            line_number,
         );
     }
 
@@ -880,14 +851,12 @@ fn updateChunk(
         fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
             FetchError.HttpError => return skipBlockUntouched(
                 allocator,
+                fc,
                 action,
                 updated_bytes,
                 lines,
                 current_line,
                 indent,
-                file_type_info,
-                file_name,
-                line_number,
             ),
             else => return err,
         };
@@ -902,14 +871,12 @@ fn updateChunk(
     ) catch |err| switch (err) {
         FetchError.HttpError => return skipBlockUntouched(
             allocator,
+            fc,
             action,
             updated_bytes,
             lines,
             current_line,
             indent,
-            file_type_info,
-            file_name,
-            line_number,
         ),
         else => return err,
     };
@@ -921,25 +888,20 @@ fn updateChunk(
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
         allocator,
+        fc,
         &base_indented,
         base_bytes,
         indent,
         base_indent,
-        file_type_info,
-        file_name,
-        line_number.*,
-        ctx.debug_indent,
     );
 
     var current_chunk: []const u8 = undefined;
     if (action == .track) {
         const current_start = current_line.ptr - lines.buffer.ptr + current_line.len + 1;
         const end_line = skipToEndLine(
+            fc,
             lines,
             indent,
-            file_type_info,
-            file_name,
-            line_number,
         );
         const current_end = end_line.ptr - lines.buffer.ptr - 1;
         current_chunk = lines.buffer[current_start..current_end];
@@ -951,14 +913,12 @@ fn updateChunk(
         fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
             FetchError.HttpError => return skipBlockUntouched(
                 allocator,
+                fc,
                 action,
                 updated_bytes,
                 lines,
                 current_line,
                 indent,
-                file_type_info,
-                file_name,
-                line_number,
             ),
             else => return err,
         };
@@ -992,14 +952,12 @@ fn updateChunk(
         ) catch |err| switch (err) {
             FetchError.HttpError => return skipBlockUntouched(
                 allocator,
+                fc,
                 action,
                 updated_bytes,
                 lines,
                 current_line,
                 indent,
-                file_type_info,
-                file_name,
-                line_number,
             ),
             else => return err,
         };
@@ -1116,14 +1074,11 @@ fn updateChunk(
         var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
         try matchIndent(
             allocator,
+            fc,
             &new_indented,
             new_bytes,
             indent,
             new_indent,
-            file_type_info,
-            file_name,
-            line_number.*,
-            ctx.debug_indent,
         );
 
         try ctx.cache_dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
@@ -1138,7 +1093,7 @@ fn updateChunk(
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
         } else {
-            std.log.info("Merging file: {s}[{d}]", .{ file_name, line_number.* });
+            std.log.info("Merging file: {s}[{d}]", .{ fc.name, fc.line_number });
             std.debug.assert(action == .track);
             try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
@@ -1190,8 +1145,8 @@ fn updateChunk(
                 .Exited => |code| {
                     if (code >= 127) {
                         std.debug.panic("{s}[{d}]: Unexpected merge result error code: {d}\n", .{
-                            file_name,
-                            line_number.*,
+                            fc.name,
+                            fc.line_number,
                             code,
                         });
                     } else if (code != 0) {
@@ -1200,8 +1155,8 @@ fn updateChunk(
                 },
                 else => {
                     std.debug.panic("{s}[{d}]: Unexpected merge result term\n", .{
-                        file_name,
-                        line_number.*,
+                        fc.name,
+                        fc.line_number,
                     });
                 },
             }
@@ -1211,14 +1166,14 @@ fn updateChunk(
     // Write back bytes
 
     const command = if (action == .get_freeze) "freeze" else "begin";
-    const enabled_differs = indent.enabled != file_settings.current_indent.enabled;
+    const enabled_differs = indent.enabled != fc.settings.current_indent.enabled;
     const indent_differs = enabled_differs or (indent.enabled and
-        (indent.width.? != file_settings.current_indent.width.? or
-            indent.char.? != file_settings.current_indent.char.?));
+        (indent.width.? != fc.settings.current_indent.width.? or
+            indent.char.? != fc.settings.current_indent.char.?));
     // We don't care if base indent differs, since we've already merged in the
     // new changes by now.
-    const new_char_differs = new_indent.char != file_settings.base_indent.char;
-    const new_width_differs = new_indent.width != file_settings.base_indent.width;
+    const new_char_differs = new_indent.char != fc.settings.base_indent.char;
+    const new_width_differs = new_indent.width != fc.settings.base_indent.width;
     const new_indent_differs = new_char_differs or new_width_differs;
     var commands: []const u8 = undefined;
     if (indent_differs or new_indent_differs) {
@@ -1233,13 +1188,13 @@ fn updateChunk(
         if (enabled_differs) {
             array.appendAssumeCapacity(if (indent.enabled) "on" else "off");
         }
-        if (indent.enabled and indent.char.? != file_settings.current_indent.char.?) {
+        if (indent.enabled and indent.char.? != fc.settings.current_indent.char.?) {
             array.appendAssumeCapacity(if (indent.char.? == ' ')
                 "spaces"
             else
                 "tabs");
         }
-        if (indent.enabled and indent.width.? != file_settings.current_indent.width.?) {
+        if (indent.enabled and indent.width.? != fc.settings.current_indent.width.?) {
             array.appendAssumeCapacity(try std.fmt.allocPrint(
                 allocator,
                 "{d}",
@@ -1318,7 +1273,7 @@ fn updateChunk(
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
-    try appendEndTag(allocator, updated_bytes, indent, file_type_info);
+    try appendEndTag(allocator, updated_bytes, indent, fc.type_info);
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
     if (has_conflicts) {
@@ -1329,19 +1284,15 @@ fn updateChunk(
 }
 
 fn handleIndentCommands(
+    fc: *const FileContext,
     args: *std.mem.SplitIterator(u8, .scalar),
     indent: *Indent,
     allow_enable_toggling: bool,
-    file_bytes: []const u8,
-    file_type_info: FileTypeInfo,
-    file_name: []const u8,
-    line_number: usize,
-    debug_indent: bool,
 ) void {
     if (args.peek() == null) {
         std.debug.panic(
             "{s}[{d}]: Expected argument (e.g. 'off', 'tabs', 'spaces', '4') after 'indent' command\n",
-            .{ file_name, line_number },
+            .{ fc.name, fc.line_number },
         );
     }
 
@@ -1351,7 +1302,7 @@ fn handleIndentCommands(
                 if (!allow_enable_toggling) {
                     std.debug.panic(
                         "{s}[{d}]: Argument 'off' not allowed for 'base-indent' or 'their-indent': use 'indent'/'our-indent' instead\n",
-                        .{ file_name, line_number },
+                        .{ fc.name, fc.line_number },
                     );
                 }
                 indent.enabled = false;
@@ -1359,12 +1310,12 @@ fn handleIndentCommands(
                 if (!allow_enable_toggling) {
                     std.debug.panic(
                         "{s}[{d}]: Argument 'on' not allowed for 'base-indent' or 'their-indent': use 'indent'/'our-indent' instead\n",
-                        .{ file_name, line_number },
+                        .{ fc.name, fc.line_number },
                     );
                 }
                 if (!indent.enabled) {
                     indent.enabled = true;
-                    getIndent(indent, file_bytes, file_type_info, file_name, line_number, debug_indent);
+                    getIndent(fc, indent, fc.bytes);
                 }
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
@@ -1603,20 +1554,18 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
 }
 
 fn skipToEndLine(
+    fc: *FileContext,
     lines: *std.mem.SplitIterator(u8, .scalar),
     indent: Indent,
-    file_type_info: FileTypeInfo,
-    file_name: []const u8,
-    line_number: *usize,
 ) []const u8 {
     var file_indent = indent;
     var nesting: usize = 0;
-    line_number.* += 1;
+    fc.line_number += 1;
 
-    return while (lines.next()) |line| : (line_number.* += 1) {
+    return while (lines.next()) |line| : (fc.line_number += 1) {
         if (!mightMatchTag(line)) continue;
 
-        const match = matchesTag(line, file_type_info, &file_indent, "", file_name, line_number.*, false);
+        const match = matchesTag(fc, line, &file_indent);
         if (match == null or !std.mem.eql(u8, match.?.indent.start_slice, indent.start_slice)) continue;
 
         const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
@@ -1646,8 +1595,8 @@ fn skipToEndLine(
         std.debug.panic(
             "{s}[{d}]: Expected copyv: end, but instead reached end of file\n",
             .{
-                file_name,
-                line_number.*,
+                fc.name,
+                fc.line_number,
             },
         );
     };
@@ -1681,8 +1630,8 @@ fn getIndentStart(
     }
 }
 
-fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, file_name: []const u8, line_number: usize, debug: bool) void {
-    const file_type_indent: FileTypeIndentDefault = switch (file_type_info.indent) {
+fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
+    const file_type_indent: FileTypeIndentDefault = switch (fc.type_info.indent) {
         .off => .{ .width = 2, .char = ' ' },
         .default => |d| d,
     };
@@ -1720,11 +1669,11 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, f
             break :blk file_type_indent.char;
         };
 
-        if (debug) {
+        if (fc.debug_indent) {
             const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
             std.log.info("{s}[{d}]: indent char={s} ({s}, spaces={d}, tabs={d})", .{
-                file_name,
-                line_number,
+                fc.name,
+                fc.line_number,
                 char_str,
                 @tagName(reason),
                 space_count,
@@ -1745,10 +1694,10 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, f
             break :blk .no_content;
         };
 
-        if (debug) {
+        if (fc.debug_indent) {
             std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
-                file_name,
-                line_number,
+                fc.name,
+                fc.line_number,
                 indent.start_width.?,
                 @tagName(reason),
             });
@@ -1819,10 +1768,10 @@ fn getIndent(indent: *Indent, bytes: []const u8, file_type_info: FileTypeInfo, f
             };
         }
 
-        if (debug) {
+        if (fc.debug_indent) {
             std.log.info("{s}[{d}]: indent width={d} ({s}, shift_counts={any})", .{
-                file_name,
-                line_number,
+                fc.name,
+                fc.line_number,
                 indent.width.?,
                 @tagName(reason),
                 shift_counts,
@@ -1860,14 +1809,11 @@ fn getMixedWhitespace(allocator: std.mem.Allocator, tab_count: usize, space_coun
 
 fn matchIndent(
     allocator: std.mem.Allocator,
+    fc: *const FileContext,
     updated_bytes: *std.ArrayList(u8),
     bytes: []const u8,
     desired: Indent,
     current_override: Indent,
-    file_type_info: FileTypeInfo,
-    file_name: []const u8,
-    line_number: usize,
-    debug_indent: bool,
 ) !void {
     if (!desired.enabled) {
         try updated_bytes.appendSlice(allocator, bytes);
@@ -1875,7 +1821,7 @@ fn matchIndent(
     }
 
     var current = current_override;
-    getIndent(&current, bytes, file_type_info, file_name, line_number, debug_indent);
+    getIndent(fc, &current, bytes);
 
     const current_width = current.width.?;
     const current_start = current.start_width.?;
