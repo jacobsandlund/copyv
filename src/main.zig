@@ -1572,7 +1572,7 @@ fn skipToEndLine(
 
 const shift_count_threshold = 6;
 const indent_char_count_threshold = 10;
-const max_lines_to_check = 150;
+const max_lines_to_check = 1000;
 const indent_char_count_min = 4;
 const max_indent_width = 16;
 
@@ -1726,9 +1726,9 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             indent.width = file_type_indent.width;
             reason = .tab_file_type_default;
         } else {
-            // bias indent counts towards expected indents as a prior
+            // Bias indent counts towards expected indents as a prior.
+            // We don't bias deindent counts as we use that as a tie breaker
             indent_counts[file_type_indent.width] += 1;
-            deindent_counts[file_type_indent.width] += 1;
 
             var last_indent: usize = 0;
             var last_line_content: []const u8 = "a";
