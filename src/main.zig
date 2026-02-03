@@ -20,6 +20,8 @@ const Platform = enum {
     }
 };
 
+const DebugIndent = enum { off, basic, verbose };
+
 const PlatformFilter = packed struct {
     github: bool = true,
     gitlab: bool = true,
@@ -50,7 +52,7 @@ const GlobalContext = struct {
     cache_dir: std.fs.Dir,
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
-    debug_indent: bool = false,
+    debug_indent: DebugIndent = .off,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -124,7 +126,7 @@ const FileContext = struct {
     type_info: FileTypeInfo,
     line_number: usize,
     settings: FileSettings,
-    debug_indent: bool,
+    debug_indent: DebugIndent,
 };
 
 const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off };
@@ -1588,7 +1590,7 @@ fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
             file_indent.width.?,
             file_indent.char.?,
         );
-        if (fc.debug_indent) {
+        if (fc.debug_indent != .off) {
             std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
                 fc.name,
                 fc.line_number,
@@ -1670,7 +1672,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             break :blk file_type_indent.char;
         };
 
-        if (fc.debug_indent) {
+        if (fc.debug_indent != .off) {
             const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
             std.log.info("{s}[{d}]: indent char={s} ({t}, spaces={d}, tabs={d}, lines={d})", .{
                 fc.name,
@@ -1702,7 +1704,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             break :blk .no_content;
         };
 
-        if (fc.debug_indent) {
+        if (fc.debug_indent != .off) {
             std.log.info("{s}[{d}]: indent start_width={d} ({t}, lines={d})", .{
                 fc.name,
                 fc.line_number,
@@ -1730,6 +1732,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
 
             var last_indent: usize = 0;
             var last_line_content: []const u8 = "a";
+            var last_line: []const u8 = "";
             var lines = std.mem.splitScalar(u8, bytes, '\n');
             const found_width = while (lines.next()) |line| : (i += 1) {
                 if (i >= max_lines_to_check) break null;
@@ -1753,6 +1756,20 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
                             if (shift < shift_counts.len) {
                                 const abs_shift = @abs(shift);
                                 shift_counts[abs_shift] += 1;
+                                if (fc.debug_indent == .verbose) {
+                                    std.log.info("{s}[{d}]: shift +{d} prev: \"{s}\"", .{
+                                        fc.name,
+                                        fc.line_number,
+                                        abs_shift,
+                                        last_line,
+                                    });
+                                    std.log.info("{s}[{d}]: shift +{d} curr: \"{s}\"", .{
+                                        fc.name,
+                                        fc.line_number,
+                                        abs_shift,
+                                        line,
+                                    });
+                                }
                                 if (shift_counts[abs_shift] >= shift_count_threshold) {
                                     reason = .threshold;
                                     break abs_shift;
@@ -1765,6 +1782,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
 
                     last_line_content = line[index..];
                 }
+                last_line = line;
             } else null;
             indent.width = found_width orelse blk: {
                 var shift: usize = 0;
@@ -1780,7 +1798,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             };
         }
 
-        if (fc.debug_indent) {
+        if (fc.debug_indent != .off) {
             std.log.info("{s}[{d}]: indent width={d} ({t}, shift_counts={any}, lines={d})", .{
                 fc.name,
                 fc.line_number,
@@ -1999,7 +2017,7 @@ pub fn main() !void {
     var blacklist = PlatformFilter.blacklist_default;
     var whitelist = PlatformFilter.whitelist_default;
     var current_filter: *PlatformFilter = &blacklist;
-    var debug_indent = false;
+    var debug_indent: DebugIndent = .off;
     var name: []const u8 = ".";
     var kind: std.fs.File.Kind = .directory;
 
@@ -2022,7 +2040,16 @@ pub fn main() !void {
             };
             current_filter.setPlatform(platform, enable);
         } else if (std.mem.eql(u8, arg, "--debug-indent")) {
-            debug_indent = true;
+            debug_indent = .basic;
+        } else if (std.mem.startsWith(u8, arg, "--debug-indent=")) {
+            const value = arg["--debug-indent=".len..];
+            if (std.mem.eql(u8, value, "verbose")) {
+                debug_indent = .verbose;
+            } else if (std.mem.eql(u8, value, "basic")) {
+                debug_indent = .basic;
+            } else {
+                std.debug.panic("Unknown --debug-indent value: {s}\n", .{value});
+            }
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
