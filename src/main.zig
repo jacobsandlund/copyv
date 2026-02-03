@@ -1570,6 +1570,7 @@ fn skipToEndLine(
 
 const shift_count_threshold = 6;
 const indent_char_count_threshold = 10;
+const max_lines_to_check = 150;
 const indent_char_count_min = 4;
 const max_indent_width = 16;
 
@@ -1642,7 +1643,8 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
         var i: usize = 0;
 
         var lines = std.mem.splitScalar(u8, bytes, '\n');
-        indent.char = while (lines.next()) |line| : (i += 1) {
+        const found_char: ?u8 = while (lines.next()) |line| : (i += 1) {
+            if (i >= max_lines_to_check) break null;
             if (std.mem.startsWith(u8, line, " ")) {
                 space_count += 1;
                 if (space_count >= indent_char_count_threshold) {
@@ -1656,7 +1658,8 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
                     break '\t';
                 }
             }
-        } else blk: {
+        } else null;
+        indent.char = found_char orelse blk: {
             const seen = tab_count + space_count;
             if (seen >= indent_char_count_min) {
                 reason = .majority;
@@ -1685,6 +1688,11 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         var i: usize = 0;
         const reason: StartWidthReason = while (lines.next()) |line| : (i += 1) {
+            if (i >= max_lines_to_check) {
+                @branchHint(.unlikely);
+                indent.start_width = 0;
+                break .no_content;
+            }
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
             if (first_non_whitespace) |index| {
                 break getIndentStart(&indent.start_width, line[0..index], file_type_indent.width, indent.char.?);
@@ -1723,7 +1731,8 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             var last_indent: usize = 0;
             var last_line_content: []const u8 = "a";
             var lines = std.mem.splitScalar(u8, bytes, '\n');
-            indent.width = while (lines.next()) |line| : (i += 1) {
+            const found_width = while (lines.next()) |line| : (i += 1) {
+                if (i >= max_lines_to_check) break null;
                 const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
                 if (first_non_whitespace) |index| {
                     if (index != last_indent) {
@@ -1756,7 +1765,8 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
 
                     last_line_content = line[index..];
                 }
-            } else blk: {
+            } else null;
+            indent.width = found_width orelse blk: {
                 var shift: usize = 0;
                 var max_count: usize = 0;
                 for (shift_counts, 0..) |count, s| {
