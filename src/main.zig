@@ -1716,19 +1716,19 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
     }
 
     if (indent.width == null) {
-        const WidthReason = enum { tab_file_type_default, threshold, max_count };
+        const WidthReason = enum { tab_file_type_default, threshold, max_count, max_count_tie_breaker };
         var reason: WidthReason = undefined;
-        var shift_counts: [max_indent_width]usize = @splat(0);
+        var indent_counts: [max_indent_width]usize = @splat(0);
+        var deindent_counts: [max_indent_width]usize = @splat(0);
         var i: usize = 0;
 
         if (indent.char.? == '\t') {
             indent.width = file_type_indent.width;
             reason = .tab_file_type_default;
         } else {
-            // bias shift counts towards expected indents as a prior
-            shift_counts[2] = 1;
-            shift_counts[4] = 1;
-            shift_counts[file_type_indent.width] += 1;
+            // bias indent counts towards expected indents as a prior
+            indent_counts[file_type_indent.width] += 1;
+            deindent_counts[file_type_indent.width] += 1;
 
             var last_indent: usize = 0;
             var last_line_content: []const u8 = "a";
@@ -1742,35 +1742,39 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
                         const shift = @as(isize, @intCast(index)) -
                             @as(isize, @intCast(last_indent));
 
-                        // * Ignore de-indent shifts, since some languages can
-                        //   de-indent multiple blocks at once (e.g. Python, or Lisps).
                         // * Ignore shifts after lines starting with '*' and '-' that
-                        //   might be part of a block comment bulleted list.
+                        //   might be part of a block comment bulleted list, or a
+                        //   block comment end (*/).
                         // * Ignore shifts after lines starting with `/*` since
                         //   that is also probably part of a block comment.
-                        if (shift > 0 and
-                            last_line_content[0] != '*' and
+                        if (last_line_content[0] != '*' and
                             last_line_content[0] != '-' and
                             !std.mem.startsWith(u8, last_line_content, "/*"))
                         {
-                            if (shift < shift_counts.len) {
-                                const abs_shift = @abs(shift);
-                                shift_counts[abs_shift] += 1;
+                            const abs_shift = @abs(shift);
+                            if (abs_shift < indent_counts.len) {
+                                if (shift > 0) {
+                                    indent_counts[abs_shift] += 1;
+                                } else {
+                                    deindent_counts[abs_shift] += 1;
+                                }
                                 if (fc.debug_indent == .verbose) {
-                                    std.log.info("{s}[{d}]: shift +{d} prev: \"{s}\"", .{
+                                    std.log.info("{s}[{d}]: shift {s}{d} prev: \"{s}\"", .{
                                         fc.name,
                                         fc.line_number,
+                                        if (shift > 0) "+" else "-",
                                         abs_shift,
                                         last_line,
                                     });
-                                    std.log.info("{s}[{d}]: shift +{d} curr: \"{s}\"", .{
+                                    std.log.info("{s}[{d}]: shift {s}{d} curr: \"{s}\"", .{
                                         fc.name,
                                         fc.line_number,
+                                        if (shift > 0) "+" else "-",
                                         abs_shift,
                                         line,
                                     });
                                 }
-                                if (shift_counts[abs_shift] >= shift_count_threshold) {
+                                if (indent_counts[abs_shift] >= shift_count_threshold) {
                                     reason = .threshold;
                                     break abs_shift;
                                 }
@@ -1787,24 +1791,45 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             indent.width = found_width orelse blk: {
                 var shift: usize = 0;
                 var max_count: usize = 0;
-                for (shift_counts, 0..) |count, s| {
+                var tie = false;
+                for (indent_counts, 0..) |count, s| {
+                    if (count == max_count) {
+                        tie = max_count > 0;
+                    }
                     if (count > max_count) {
                         max_count = count;
                         shift = s;
+                        tie = false;
                     }
                 }
-                reason = .max_count;
+                if (tie) {
+                    // Only use de-indent counts as a tie breaker, as many
+                    // languages may de-indent multiple blocks at once (e.g.
+                    // Python, or Lisps).
+                    shift = 0;
+                    max_count = 0;
+                    for (deindent_counts, 0..) |count, s| {
+                        if (count > max_count) {
+                            max_count = count;
+                            shift = s;
+                        }
+                    }
+                    reason = .max_count_tie_breaker;
+                } else {
+                    reason = .max_count;
+                }
                 break :blk shift;
             };
         }
 
         if (fc.debug_indent != .off) {
-            std.log.info("{s}[{d}]: indent width={d} ({t}, shift_counts={any}, lines={d})", .{
+            std.log.info("{s}[{d}]: indent width={d} ({t}, indent_counts={any}, deindent_counts={any} lines={d})", .{
                 fc.name,
                 fc.line_number,
                 indent.width.?,
                 reason,
-                shift_counts,
+                indent_counts,
+                deindent_counts,
                 i,
             });
         }
