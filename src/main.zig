@@ -94,7 +94,7 @@ const FileTypeInfo = struct {
 
 const Match = struct {
     prefix: []const u8,
-    indent: Indent,
+    indent: []const u8,
     comment: Comment,
 };
 
@@ -472,7 +472,6 @@ const line_whitespace = " \t";
 fn matchesTag(
     fc: *const FileContext,
     line: []const u8,
-    file_indent: *Indent,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
     for (fc.type_info.comments) |comment| {
@@ -488,37 +487,9 @@ fn matchesTag(
                 const comment_start = line.len - line_trimmed.len;
                 const tag_whitespace = tag.len - tag_trimmed.len;
                 const prefix_len = comment_start + comment_prefix.len + tag_whitespace + copyv_tag.len;
-                const prefix = line[0..prefix_len];
-                const start_slice = line[0..comment_start];
-                var start_width: ?usize = null;
-
-                if (file_indent.enabled) {
-                    getIndent(fc, file_indent, fc.bytes);
-                    const reason = getIndentStart(
-                        &start_width,
-                        start_slice,
-                        file_indent.width.?,
-                        file_indent.char.?,
-                    );
-                    if (fc.debug_indent) {
-                        std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
-                            fc.name,
-                            fc.line_number,
-                            start_width.?,
-                            @tagName(reason),
-                        });
-                    }
-                }
-
                 return .{
-                    .prefix = prefix,
-                    .indent = .{
-                        .enabled = file_indent.enabled,
-                        .start_slice = start_slice,
-                        .start_width = start_width,
-                        .width = file_indent.width,
-                        .char = file_indent.char,
-                    },
+                    .prefix = line[0..prefix_len],
+                    .indent = line[0..comment_start],
                     .comment = comment,
                 };
             }
@@ -598,11 +569,7 @@ fn updateChunk(
     current_line: []const u8,
 ) !ChunkStatus {
     // Check if matches tag
-    const maybe_match = matchesTag(
-        fc,
-        current_line,
-        &fc.settings.current_indent,
-    );
+    const maybe_match = matchesTag(fc, current_line);
 
     if (maybe_match == null) {
         return .not_a_chunk;
@@ -610,7 +577,7 @@ fn updateChunk(
 
     const match = maybe_match.?;
     const prefix = match.prefix;
-    var indent: Indent = match.indent;
+    var indent: Indent = getChunkIndent(fc, match.indent);
     var base_indent: Indent = fc.settings.base_indent;
     var new_indent: Indent = fc.settings.new_indent;
 
@@ -1558,15 +1525,14 @@ fn skipToEndLine(
     lines: *std.mem.SplitIterator(u8, .scalar),
     indent: Indent,
 ) []const u8 {
-    var file_indent = indent;
     var nesting: usize = 0;
     fc.line_number += 1;
 
     return while (lines.next()) |line| : (fc.line_number += 1) {
         if (!mightMatchTag(line)) continue;
 
-        const match = matchesTag(fc, line, &file_indent);
-        if (match == null or !std.mem.eql(u8, match.?.indent.start_slice, indent.start_slice)) continue;
+        const match = matchesTag(fc, line);
+        if (match == null or !std.mem.eql(u8, match.?.indent, indent.start_slice)) continue;
 
         const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
         var line_args = std.mem.splitScalar(u8, line_payload, ' ');
@@ -1608,6 +1574,37 @@ const indent_char_count_min = 4;
 const max_indent_width = 16;
 
 const StartWidthReason = enum { spaces, mixed, no_content };
+
+fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
+    const file_indent = &fc.settings.current_indent;
+    var start_width: ?usize = null;
+
+    if (file_indent.enabled) {
+        getIndent(fc, file_indent, fc.bytes);
+        const reason = getIndentStart(
+            &start_width,
+            indent_slice,
+            file_indent.width.?,
+            file_indent.char.?,
+        );
+        if (fc.debug_indent) {
+            std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
+                fc.name,
+                fc.line_number,
+                start_width.?,
+                @tagName(reason),
+            });
+        }
+    }
+
+    return .{
+        .enabled = file_indent.enabled,
+        .start_slice = indent_slice,
+        .start_width = start_width,
+        .width = file_indent.width,
+        .char = file_indent.char,
+    };
+}
 
 fn getIndentStart(
     start_width: *?usize,
