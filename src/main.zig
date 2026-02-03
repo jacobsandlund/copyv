@@ -1639,9 +1639,10 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
 
         var space_count: usize = 0;
         var tab_count: usize = 0;
+        var i: usize = 0;
 
         var lines = std.mem.splitScalar(u8, bytes, '\n');
-        indent.char = while (lines.next()) |line| {
+        indent.char = while (lines.next()) |line| : (i += 1) {
             if (std.mem.startsWith(u8, line, " ")) {
                 space_count += 1;
                 if (space_count >= indent_char_count_threshold) {
@@ -1668,20 +1669,22 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
 
         if (fc.debug_indent) {
             const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
-            std.log.info("{s}[{d}]: indent char={s} ({s}, spaces={d}, tabs={d})", .{
+            std.log.info("{s}[{d}]: indent char={s} ({t}, spaces={d}, tabs={d}, lines={d})", .{
                 fc.name,
                 fc.line_number,
                 char_str,
-                @tagName(reason),
+                reason,
                 space_count,
                 tab_count,
+                i,
             });
         }
     }
 
     if (indent.start_width == null) {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
-        const reason: StartWidthReason = while (lines.next()) |line| {
+        var i: usize = 0;
+        const reason: StartWidthReason = while (lines.next()) |line| : (i += 1) {
             const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
             if (first_non_whitespace) |index| {
                 break getIndentStart(&indent.start_width, line[0..index], file_type_indent.width, indent.char.?);
@@ -1692,11 +1695,12 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
         };
 
         if (fc.debug_indent) {
-            std.log.info("{s}[{d}]: indent start_width={d} ({s})", .{
+            std.log.info("{s}[{d}]: indent start_width={d} ({t}, lines={d})", .{
                 fc.name,
                 fc.line_number,
                 indent.start_width.?,
-                @tagName(reason),
+                reason,
+                i,
             });
         }
     }
@@ -1705,6 +1709,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
         const WidthReason = enum { tab_file_type_default, threshold, max_count };
         var reason: WidthReason = undefined;
         var shift_counts: [max_indent_width]usize = @splat(0);
+        var i: usize = 0;
 
         if (indent.char.? == '\t') {
             indent.width = file_type_indent.width;
@@ -1718,7 +1723,7 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             var last_indent: usize = 0;
             var last_line_content: []const u8 = "a";
             var lines = std.mem.splitScalar(u8, bytes, '\n');
-            indent.width = while (lines.next()) |line| {
+            indent.width = while (lines.next()) |line| : (i += 1) {
                 const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
                 if (first_non_whitespace) |index| {
                     if (index != last_indent) {
@@ -1754,10 +1759,10 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
             } else blk: {
                 var shift: usize = 0;
                 var max_count: usize = 0;
-                for (shift_counts, 0..) |count, i| {
+                for (shift_counts, 0..) |count, s| {
                     if (count > max_count) {
                         max_count = count;
-                        shift = i;
+                        shift = s;
                     }
                 }
                 reason = .max_count;
@@ -1766,12 +1771,13 @@ fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
         }
 
         if (fc.debug_indent) {
-            std.log.info("{s}[{d}]: indent width={d} ({s}, shift_counts={any})", .{
+            std.log.info("{s}[{d}]: indent width={d} ({t}, shift_counts={any}, lines={d})", .{
                 fc.name,
                 fc.line_number,
                 indent.width.?,
-                @tagName(reason),
+                reason,
                 shift_counts,
+                i,
             });
         }
     }
