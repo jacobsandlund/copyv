@@ -240,6 +240,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".nim", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "##" }, .{ .paired = .{ .begin = "#[", .end = "]#" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".nix", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".nqp", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
+    .{ ".nu", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".p6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".php", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .line = "#" }, .{ .paired = .{ .begin = "/*", .end = "*/" } }, .{ .paired = .{ .begin = "/**", .end = "*/" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".pl", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
