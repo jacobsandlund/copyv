@@ -1243,16 +1243,6 @@ fn updateChunk(
         ),
     };
     try appendTag(allocator, fc, updated_bytes, indent, begin);
-    switch (match.comment) {
-        .line => {},
-        .paired => |p| {
-            try updated_bytes.append(allocator, ' ');
-            try updated_bytes.appendSlice(allocator, p.end);
-        },
-        .json => {
-            try updated_bytes.appendSlice(allocator, "\",");
-        },
-    }
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
