@@ -85,6 +85,7 @@ const Comment = union(enum) {
 
     const Json = enum {
         open,
+        bare_open,
         close,
         comma_close,
     };
@@ -102,6 +103,7 @@ const FileTypeInfo = struct {
 
     const json = &[_]Comment{
         .{ .json = .open },
+        .{ .json = .bare_open },
         .{ .json = .close },
         .{ .json = .comma_close },
     };
@@ -497,6 +499,7 @@ fn matchesTag(
             .paired => |p| p.begin,
             .json => |json_type| switch (json_type) {
                 .open => "\"$copyv\":",
+                .bare_open => "\"copyv\":",
                 .close => "\"$$copyv\":",
                 .comma_close => ",\"$$copyv\":",
             },
@@ -1212,12 +1215,11 @@ fn updateChunk(
         .github, .codeberg => try std.fmt.allocPrint(allocator, "#L{d}-L{d}", .{ new_start, new_end }),
         .gitlab => try std.fmt.allocPrint(allocator, "#L{d}-{d}", .{ new_start, new_end }),
     };
-    const updated_url = switch (platform) {
+    const begin = switch (platform) {
         .github, .codeberg => try std.fmt.allocPrint(
             allocator,
-            "{s}https://{s}/{s}/{s}/{s}/{s}{s} {s}",
+            "https://{s}/{s}/{s}/{s}/{s}{s} {s}",
             .{
-                prefix,
                 host,
                 repo,
                 if (platform == .github) "blob" else "src/commit",
@@ -1229,9 +1231,8 @@ fn updateChunk(
         ),
         .gitlab => try std.fmt.allocPrint(
             allocator,
-            "{s}https://{s}/{s}/-/blob/{s}/{s}{s} {s}",
+            "https://{s}/{s}/-/blob/{s}/{s}{s} {s}",
             .{
-                prefix,
                 host,
                 repo,
                 new_sha,
@@ -1241,7 +1242,7 @@ fn updateChunk(
             },
         ),
     };
-    try updated_bytes.appendSlice(allocator, updated_url);
+    try appendTag(allocator, fc, updated_bytes, indent, begin);
     switch (match.comment) {
         .line => {},
         .paired => |p| {
@@ -1255,37 +1256,53 @@ fn updateChunk(
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
-
-    // end tag
-    try updated_bytes.appendSlice(allocator, indent.start_slice);
-    switch (fc.type_info.comments[0]) {
-        .line => |comment| {
-            try updated_bytes.appendSlice(allocator, comment);
-            try updated_bytes.appendSlice(allocator, " copyv: end");
-        },
-        .paired => |p| {
-            try updated_bytes.appendSlice(allocator, p.begin);
-            try updated_bytes.appendSlice(allocator, " copyv: end ");
-            try updated_bytes.appendSlice(allocator, p.end);
-        },
-        .json => {
-            const items = updated_bytes.items;
-            const last = std.mem.lastIndexOfNone(u8, items, &std.ascii.whitespace);
-            const has_trailing_comma = last != null and items[last.?] == ',';
-            if (has_trailing_comma) {
-                try updated_bytes.appendSlice(allocator, "\"$$copyv\": \"end\"");
-            } else {
-                try updated_bytes.appendSlice(allocator, ",\"$$copyv\": \"end\"");
-            }
-        },
-    }
-
+    try appendTag(allocator, fc, updated_bytes, indent, "end");
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
     if (has_conflicts) {
         return .updated_with_conflicts;
     } else {
         return .updated;
+    }
+}
+
+fn appendTag(
+    allocator: std.mem.Allocator,
+    fc: *const FileContext,
+    updated_bytes: *std.ArrayList(u8),
+    indent: Indent,
+    contents: []const u8,
+) !void {
+    try updated_bytes.appendSlice(allocator, indent.start_slice);
+    switch (fc.type_info.comments[0]) {
+        .line => |comment| {
+            try updated_bytes.appendSlice(allocator, comment);
+            try updated_bytes.appendSlice(allocator, " copyv: ");
+            try updated_bytes.appendSlice(allocator, contents);
+        },
+        .paired => |p| {
+            try updated_bytes.appendSlice(allocator, p.begin);
+            try updated_bytes.appendSlice(allocator, " copyv: ");
+            try updated_bytes.appendSlice(allocator, contents);
+            try updated_bytes.append(allocator, ' ');
+            try updated_bytes.appendSlice(allocator, p.end);
+        },
+        .json => {
+            if (std.mem.eql(u8, contents, "end")) {
+                const items = updated_bytes.items;
+                const last = std.mem.lastIndexOfNone(u8, items, &std.ascii.whitespace);
+                const has_trailing_comma = last != null and items[last.?] == ',';
+                if (has_trailing_comma) {
+                    try updated_bytes.appendSlice(allocator, "\"$$copyv\": \"end\"");
+                } else {
+                    try updated_bytes.appendSlice(allocator, ",\"$$copyv\": \"end\"");
+                }
+            } else {
+                try updated_bytes.appendSlice(allocator, "\"$copyv\": \"");
+                try updated_bytes.appendSlice(allocator, contents);
+                try updated_bytes.appendSlice(allocator, "\",");
+            }
+        },
     }
 }
 
