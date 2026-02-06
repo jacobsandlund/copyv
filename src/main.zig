@@ -76,15 +76,18 @@ const ShaCache = std.HashMap(ShaCacheKey, []const u8, struct {
 }, std.hash_map.default_max_load_percentage);
 
 const Comment = union(enum) {
-    json: enum {
-        open,
-        close,
-    },
+    json: Json,
     line: []const u8,
     paired: struct {
         begin: []const u8,
         end: []const u8,
     },
+
+    const Json = enum {
+        open,
+        close,
+        comma_close,
+    };
 };
 
 const FileTypeIndentDefault = struct { width: u8, char: u8 };
@@ -96,6 +99,12 @@ const FileTypeIndent = union(enum) {
 const FileTypeInfo = struct {
     comments: []const Comment,
     indent: FileTypeIndent,
+
+    const json = &[_]Comment{
+        .{ .json = .open },
+        .{ .json = .close },
+        .{ .json = .comma_close },
+    };
 };
 
 const Match = struct {
@@ -218,7 +227,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".jinja", FileTypeInfo{ .comments = &[_]Comment{.{ .paired = .{ .begin = "{#", .end = "#}" } }}, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".jl", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#=", .end = "=#" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".js", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
-    .{ ".json", FileTypeInfo{ .comments = &[_]Comment{ .{ .json = .open }, .{ .json = .close } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".json", FileTypeInfo{ .comments = FileTypeInfo.json, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".json5", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".jsonc", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".jsx", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
@@ -253,7 +262,7 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ ".pm6", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .paired = .{ .begin = "#`(", .end = ")" } }, .{ .paired = .{ .begin = "#`[", .end = "]" } }, .{ .paired = .{ .begin = "#`{", .end = "}" } } }, .indent = .{ .default = .{ .width = 4, .char = ' ' } } } },
     .{ ".po", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off } },
     .{ ".pot", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off } },
-    .{ ".prettierrc", FileTypeInfo{ .comments = &[_]Comment{ .{ .json = .open }, .{ .json = .close } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
+    .{ ".prettierrc", FileTypeInfo{ .comments = FileTypeInfo.json, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".properties", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "#" }, .{ .line = "!" } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".proto", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
     .{ ".proto3", FileTypeInfo{ .comments = &[_]Comment{ .{ .line = "//" }, .{ .paired = .{ .begin = "/*", .end = "*/" } } }, .indent = .{ .default = .{ .width = 2, .char = ' ' } } } },
@@ -481,34 +490,34 @@ fn matchesTag(
     line: []const u8,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
+    var payload = line_trimmed;
     for (fc.type_info.comments) |comment| {
-        const comment_prefix: []const u8 = switch (comment) {
-            .line => |prefix| prefix,
+        const prefix_start: []const u8 = switch (comment) {
+            .line => |l| l,
             .paired => |p| p.begin,
-            .json => "",
-        };
-
-        const tag: []const u8 = switch (comment) {
-            .line, .paired => "copyv:",
             .json => |json_type| switch (json_type) {
-                .open => "\"$copyv\": \"",
-                .close => ",\"$$copyv\": \"",
+                .open => "\"$copyv\":",
+                .close => "\"$$copyv\":",
+                .comma_close => ",\"$$copyv\":",
             },
         };
 
-        if (std.mem.startsWith(u8, line_trimmed, comment_prefix)) {
-            const content = line_trimmed[comment_prefix.len..];
-            const content_trimmed = std.mem.trimStart(u8, content, line_whitespace);
-            if (std.mem.startsWith(u8, content_trimmed, tag)) {
-                const comment_start = line.len - line_trimmed.len;
-                const content_whitespace = content.len - content_trimmed.len;
-                const after_tag = content_trimmed[tag.len..];
-                const after_tag_trimmed = std.mem.trimStart(u8, after_tag, line_whitespace);
-                const tag_trailing_whitespace = after_tag.len - after_tag_trimmed.len;
-                const prefix_len = comment_start + comment_prefix.len + content_whitespace + tag.len + tag_trailing_whitespace;
+        const prefix_end: []const u8 = switch (comment) {
+            .line, .paired => "copyv:",
+            .json => "\"",
+        };
+
+        if (std.mem.startsWith(u8, payload, prefix_start)) {
+            payload = payload[prefix_start.len..];
+            payload = std.mem.trimStart(u8, payload, line_whitespace);
+            if (std.mem.startsWith(u8, payload, prefix_end)) {
+                payload = payload[prefix_end.len..];
+                payload = std.mem.trimStart(u8, payload, line_whitespace);
+                const prefix_len = payload.ptr - line.ptr;
+                const indent_len = line.len - line_trimmed.len;
                 return .{
                     .prefix = line[0..prefix_len],
-                    .indent = line[0..comment_start],
+                    .indent = line[0..indent_len],
                     .comment = comment,
                 };
             }
@@ -595,7 +604,7 @@ fn updateChunk(
             }
         },
     }
-    const line_payload = std.mem.trim(u8, line_remainder, line_whitespace);
+    const line_payload = std.mem.trimEnd(u8, line_remainder, line_whitespace);
     var line_args = std.mem.splitScalar(u8, line_payload, ' ');
 
     var url_with_line_numbers: []const u8 = undefined;
@@ -1260,7 +1269,14 @@ fn updateChunk(
             try updated_bytes.appendSlice(allocator, p.end);
         },
         .json => {
-            try updated_bytes.appendSlice(allocator, ",\"$$copyv\": \"end\"");
+            const items = updated_bytes.items;
+            const last = std.mem.lastIndexOfNone(u8, items, &std.ascii.whitespace);
+            const has_trailing_comma = last != null and items[last.?] == ',';
+            if (has_trailing_comma) {
+                try updated_bytes.appendSlice(allocator, "\"$$copyv\": \"end\"");
+            } else {
+                try updated_bytes.appendSlice(allocator, ",\"$$copyv\": \"end\"");
+            }
         },
     }
 
@@ -1573,10 +1589,10 @@ fn skipToEndLine(
         const match = matchesTag(fc, line);
         if (match == null or !std.mem.eql(u8, match.?.indent, indent.start_slice)) continue;
 
-        const line_payload = std.mem.trim(u8, line[match.?.prefix.len..], line_whitespace);
-        var line_args = std.mem.splitScalar(u8, line_payload, ' ');
+        const payload = line[match.?.prefix.len..];
+        var line_args = std.mem.splitScalar(u8, payload, ' ');
         const first_arg = line_args.first();
-        if (std.mem.startsWith(u8, first_arg, "end")) {
+        if (std.mem.eql(u8, first_arg, "end")) {
             if (nesting == 0) {
                 break line;
             }
