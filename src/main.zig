@@ -490,8 +490,8 @@ fn matchesTag(
     line: []const u8,
 ) ?Match {
     const line_trimmed = std.mem.trimStart(u8, line, line_whitespace);
-    var payload = line_trimmed;
     for (fc.type_info.comments) |comment| {
+        var payload = line_trimmed;
         const prefix_start: []const u8 = switch (comment) {
             .line => |l| l,
             .paired => |p| p.begin,
@@ -1592,7 +1592,7 @@ fn skipToEndLine(
         const payload = line[match.?.prefix.len..];
         var line_args = std.mem.splitScalar(u8, payload, ' ');
         const first_arg = line_args.first();
-        if (std.mem.eql(u8, first_arg, "end")) {
+        if (std.mem.startsWith(u8, first_arg, "end")) {
             if (nesting == 0) {
                 break line;
             }
