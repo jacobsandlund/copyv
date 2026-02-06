@@ -1552,12 +1552,27 @@ fn normalizeWholeFile(bytes: []const u8, comment: Comment) []const u8 {
     var result = removeFinalNewline(bytes);
     switch (comment) {
         .json => {
-            if (std.mem.indexOfScalar(u8, result, '\n')) |first_newline| {
-                result = result[first_newline + 1 ..];
+            var lines = std.mem.splitScalar(u8, result, '\n');
+            while (lines.next()) |line| {
+                if (std.mem.eql(u8, line, "{")) {
+                    result = result[line.ptr - result.ptr + line.len + 1 ..];
+                    break;
+                }
+            } else {
+                @panic("normalizeWholeFile: no opening '{' line found in json file");
             }
-            if (std.mem.lastIndexOfScalar(u8, result, '\n')) |last_newline| {
-                result = result[0..last_newline];
+
+            var rlines = std.mem.splitBackwardsScalar(u8, result, '\n');
+            while (rlines.next()) |line| {
+                if (std.mem.eql(u8, line, "}")) {
+                    result = result[0 .. line.ptr - result.ptr];
+                    break;
+                }
+            } else {
+                @panic("normalizeWholeFile: no closing '}' line found in json file");
             }
+
+            result = std.mem.trimRight(u8, result, "\n");
         },
         .line, .paired => {},
     }
