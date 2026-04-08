@@ -1242,11 +1242,11 @@ fn updateChunk(
             },
         ),
     };
-    try appendTag(allocator, fc, updated_bytes, indent, begin);
+    try appendTag(allocator, updated_bytes, indent, match.comment, begin);
     try updated_bytes.append(allocator, '\n');
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
-    try appendTag(allocator, fc, updated_bytes, indent, "end");
+    try appendTag(allocator, updated_bytes, indent, fc.type_info.comments[0], "end");
     try maybeAppendNewline(allocator, updated_bytes, lines);
 
     if (has_conflicts) {
@@ -1258,15 +1258,15 @@ fn updateChunk(
 
 fn appendTag(
     allocator: std.mem.Allocator,
-    fc: *const FileContext,
     updated_bytes: *std.ArrayList(u8),
     indent: Indent,
+    comment: Comment,
     contents: []const u8,
 ) !void {
     try updated_bytes.appendSlice(allocator, indent.start_slice);
-    switch (fc.type_info.comments[0]) {
-        .line => |comment| {
-            try updated_bytes.appendSlice(allocator, comment);
+    switch (comment) {
+        .line => |line_comment| {
+            try updated_bytes.appendSlice(allocator, line_comment);
             try updated_bytes.appendSlice(allocator, " copyv: ");
             try updated_bytes.appendSlice(allocator, contents);
         },
@@ -1617,23 +1617,25 @@ fn skipToEndLine(
     return while (lines.next()) |line| : (fc.line_number += 1) {
         if (!mightMatchTag(line)) continue;
 
-        const match = matchesTag(fc, line);
-        if (match == null or !std.mem.eql(u8, match.?.indent, indent.start_slice)) continue;
+        const maybe_match = matchesTag(fc, line);
+        if (maybe_match) |match| {
+            if (!std.mem.eql(u8, match.indent, indent.start_slice)) continue;
 
-        const payload = line[match.?.prefix.len..];
-        var line_args = std.mem.splitScalar(u8, payload, ' ');
-        const first_arg = line_args.first();
-        if (std.mem.startsWith(u8, first_arg, "end")) {
-            if (nesting == 0) {
-                break line;
-            }
+            const payload = line[match.prefix.len..];
+            var line_args = std.mem.splitScalar(u8, payload, ' ');
+            const first_arg = line_args.first();
+            if (std.mem.startsWith(u8, first_arg, "end")) {
+                if (nesting == 0) {
+                    break line;
+                }
 
-            nesting -= 1;
-        } else if (line_args.next()) |command| {
-            if (std.mem.eql(u8, command, "begin") or
-                std.mem.eql(u8, command, "freeze"))
-            {
-                nesting += 1;
+                nesting -= 1;
+            } else if (line_args.next()) |command| {
+                if (std.mem.eql(u8, command, "begin") or
+                    std.mem.eql(u8, command, "freeze"))
+                {
+                    nesting += 1;
+                }
             }
         }
     } else {
