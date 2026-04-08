@@ -36,4 +36,4 @@ fn stepTable(ptr: *anyopaque) Benchmark.Error!void {
 }
 // copyv: end
 
-// copyv: https://github.com/jacobsandlund/uucode/blob/main/src/types.zig#L1078-L1092
+// copyv: https://github.com/jacobsandlund/uucode/blob/main/src/types.zig#L95-L102

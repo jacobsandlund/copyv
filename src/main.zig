@@ -865,7 +865,7 @@ fn updateChunk(
     const base_bytes = if (whole_file)
         normalizeWholeFile(base_file.data, match.comment)
     else
-        try getLines(base_file.data, base_start, base_end);
+        getLines(base_file.data, base_start, base_end);
 
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
@@ -1051,7 +1051,7 @@ fn updateChunk(
                 }
             }
 
-            break :new_bytes try getLines(new_file.data, new_start, new_end);
+            break :new_bytes getLines(new_file.data, new_start, new_end);
         };
         var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
         try matchIndent(
@@ -1579,7 +1579,16 @@ fn normalizeWholeFile(bytes: []const u8, comment: Comment) []const u8 {
     return result;
 }
 
-fn getLines(bytes: []const u8, start_line: usize, end_line: usize) ![]const u8 {
+fn getLines(bytes: []const u8, start_line: usize, end_line: usize) []const u8 {
+    const total_lines = std.mem.count(u8, bytes, "\n") + 1;
+    if (end_line > total_lines) {
+        std.debug.panic(
+            "Source file only has {d} lines, but the URL references lines {d}-{d}. " ++
+            "The source file may have changed — update the line numbers in the copyv tag.\n",
+            .{ total_lines, start_line, end_line },
+        );
+    }
+
     var start: usize = undefined;
     var end: usize = undefined;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
