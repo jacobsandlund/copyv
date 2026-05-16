@@ -971,7 +971,6 @@ fn updateChunk(
             var base_range: GitRange = .{ .start = 0, .len = 0 };
             var new_range: GitRange = .{ .start = 0, .len = 0 };
             var has_diff_in_chunk = false;
-            var last_diff_delta: isize = 0;
 
             for (0..4) |_| _ = diff_lines.next(); // Skip diff header
 
@@ -985,7 +984,6 @@ fn updateChunk(
                     new_range = try parseRange(header_parts.next().?);
                     base_line = base_range.start;
                     new_line = new_range.start;
-                    last_diff_delta = @as(isize, @intCast(base_range.start)) - @as(isize, @intCast(new_range.start));
                     const base_range_end = base_range.start + base_range.len;
 
                     if ((base_line <= base_start and base_end <= base_range_end) or
@@ -1043,9 +1041,12 @@ fn updateChunk(
                 // None of the diffs affected the chunk
 
                 if (new_start == 0) {
+                    // The chunk falls entirely after the last hunk, so apply
+                    // the cumulative shift accumulated through all hunks.
                     std.debug.assert(new_end == 0);
-                    new_start = @intCast(@as(isize, @intCast(base_start)) + last_diff_delta);
-                    new_end = @intCast(@as(isize, @intCast(base_end)) + last_diff_delta);
+                    const delta = @as(isize, @intCast(new_line)) - @as(isize, @intCast(base_line));
+                    new_start = @intCast(@as(isize, @intCast(base_start)) + delta);
+                    new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
                 } else {
                     std.debug.assert(new_end - new_start == base_end - base_start);
                 }
