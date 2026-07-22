@@ -403,13 +403,13 @@ fn updateFile(
 
     const allocator = ctx.arena.allocator();
     defer _ = ctx.arena.reset(.{ .retain_with_limit = 1024 * 1024 });
-    var file = try dir.openFile(ctx.io, file_name, .{});
-    errdefer file.close(ctx.io); // also closed below
-    var buf: [4096]u8 = undefined;
-    var file_reader = file.reader(ctx.io, &buf);
-    var reader = &file_reader.interface;
-    const bytes = try reader.allocRemaining(allocator, .unlimited);
-    file.close(ctx.io);
+    const bytes = blk: {
+        var file = try dir.openFile(ctx.io, file_name, .{});
+        defer file.close(ctx.io);
+        var buf: [4096]u8 = undefined;
+        var file_reader = file.reader(ctx.io, &buf);
+        break :blk try file_reader.interface.allocRemaining(allocator, .unlimited);
+    };
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var has_update = false;
     var has_conflicts = false;
@@ -1592,6 +1592,18 @@ fn normalizeWholeFile(bytes: []const u8, comment: Comment) []const u8 {
 
 fn getLines(bytes: []const u8, start_line: usize, end_line: usize) []const u8 {
     const total_lines = std.mem.count(u8, bytes, "\n") + 1;
+    if (start_line == end_line + 1) {
+        if (start_line == total_lines + 1) return bytes[bytes.len..];
+
+        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var i: usize = 1;
+        while (lines.next()) |line| : (i += 1) {
+            if (i == start_line) {
+                const offset = line.ptr - bytes.ptr;
+                return bytes[offset..offset];
+            }
+        }
+    }
     if (end_line > total_lines) {
         std.debug.panic(
             "Source file only has {d} lines, but the URL references lines {d}-{d}. " ++
@@ -1615,6 +1627,17 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) []const u8 {
     }
 
     return bytes[start..end];
+}
+
+test "getLines returns an empty slice for a deleted range" {
+    const bytes = "one\ntwo\nthree";
+    const empty_middle = getLines(bytes, 2, 1);
+    const empty_at_end = getLines(bytes, 4, 3);
+
+    try std.testing.expectEqual(@intFromPtr(bytes.ptr + 4), @intFromPtr(empty_middle.ptr));
+    try std.testing.expectEqual(@intFromPtr(bytes.ptr + bytes.len), @intFromPtr(empty_at_end.ptr));
+    try std.testing.expectEqual(0, empty_middle.len);
+    try std.testing.expectEqual(0, empty_at_end.len);
 }
 
 fn skipToEndLine(
