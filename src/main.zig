@@ -25,7 +25,7 @@ const DebugIndent = enum { off, basic, verbose };
 const UpdateMode = enum {
     all,
     changed,
-    changed_lines,
+    changed_or_moved,
 };
 
 fn shouldUpdate(
@@ -38,7 +38,7 @@ fn shouldUpdate(
     return switch (mode) {
         .all => true,
         .changed => content_changed,
-        .changed_lines => content_changed or lines_changed,
+        .changed_or_moved => content_changed or lines_changed,
     };
 }
 
@@ -46,8 +46,8 @@ test "selective update modes" {
     try std.testing.expect(shouldUpdate(.all, .track, false, false));
     try std.testing.expect(!shouldUpdate(.changed, .track, false, true));
     try std.testing.expect(shouldUpdate(.changed, .track, true, false));
-    try std.testing.expect(shouldUpdate(.changed_lines, .track, false, true));
-    try std.testing.expect(!shouldUpdate(.changed_lines, .track, false, false));
+    try std.testing.expect(shouldUpdate(.changed_or_moved, .track, false, true));
+    try std.testing.expect(!shouldUpdate(.changed_or_moved, .track, false, false));
     try std.testing.expect(shouldUpdate(.changed, .get, false, false));
 }
 
@@ -2368,8 +2368,8 @@ pub fn main(init: std.process.Init) !void {
             verbose = true;
         } else if (std.mem.eql(u8, arg, "--changed")) {
             update_mode = .changed;
-        } else if (std.mem.eql(u8, arg, "--changed-lines")) {
-            update_mode = .changed_lines;
+        } else if (std.mem.eql(u8, arg, "--changed-or-moved")) {
+            update_mode = .changed_or_moved;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {

@@ -50,9 +50,9 @@ $ copyv
 
 Use `copyv --changed` to rewrite only chunks whose source content changed. This
 leaves a chunk completely untouched when only its commit SHA or line numbers
-changed. Use `copyv --changed-lines` to also rewrite chunks whose source moved
-to different line numbers, while still ignoring SHA-only changes. Options must
-appear before file arguments.
+changed. Use `copyv --changed-or-moved` to also rewrite chunks whose source
+moved to different line numbers, while still ignoring SHA-only changes. Options
+must appear before file arguments.
 
 This merges in all the changes up to the latest, including [commit `286628d`](https://github.com/nvim-telescope/telescope.nvim/commit/286628d9f2056cc71d3f3871b5ca4f3209de0dbf) which adds a missing `<leader>`, and updates the SHA:
 
