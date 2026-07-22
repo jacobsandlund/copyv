@@ -18,4 +18,3 @@ Prefer self-documenting code to comments, but add detailed comments for anything
 
 Never leave trailing whitespace in lines of source code.
 
-This is Zig 0.15, so use std.Io, format strings with "{s}".

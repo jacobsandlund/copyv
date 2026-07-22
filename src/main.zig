@@ -55,6 +55,7 @@ const GlobalContext = struct {
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
     debug_indent: DebugIndent = .off,
+    verbose: bool = false,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -396,7 +397,16 @@ fn updateFile(
     dir: std.Io.Dir,
     file_name: []const u8,
 ) !void {
-    std.log.debug("Updating file: {s}", .{file_name});
+    if (ctx.verbose) {
+        var path_buffer: [4096]u8 = undefined;
+        if (dir.realPathFile(ctx.io, file_name, &path_buffer)) |path_len| {
+            std.log.info("Updating file: {s}", .{path_buffer[0..path_len]});
+        } else |_| {
+            std.log.info("Updating file: {s}", .{file_name});
+        }
+    } else {
+        std.log.debug("Updating file: {s}", .{file_name});
+    }
     const ext = std.fs.path.extension(file_name);
     const file_type_info = file_type_info_map.get(ext) orelse
         file_type_info_map.get(file_name) orelse return;
@@ -431,6 +441,9 @@ fn updateFile(
 
     while (lines.next()) |line| : (fc.line_number += 1) {
         if (mightMatchTag(line)) {
+            if (ctx.verbose) {
+                std.log.info("Checking possible chunk: {s}[{d}]", .{ fc.name, fc.line_number });
+            }
             switch (try updateChunk(
                 allocator,
                 ctx,
@@ -569,6 +582,31 @@ fn skipBlockUntouched(
         try maybeAppendNewline(allocator, updated_bytes, lines);
     }
     return .untouched;
+}
+
+fn skipBlockAfterFetchError(
+    allocator: std.mem.Allocator,
+    fc: *FileContext,
+    action: Action,
+    updated_bytes: *std.ArrayList(u8),
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    current_line: []const u8,
+    indent: Indent,
+) !ChunkStatus {
+    std.log.warn("{s}[{d}]: Leaving {s} chunk untouched after fetch failure", .{
+        fc.name,
+        fc.line_number,
+        @tagName(action),
+    });
+    return skipBlockUntouched(
+        allocator,
+        fc,
+        action,
+        updated_bytes,
+        lines,
+        current_line,
+        indent,
+    );
 }
 
 fn readCurrentChunk(
@@ -848,7 +886,7 @@ fn updateChunk(
         ref
     else
         fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockUntouched(
+            FetchError.HttpError => return skipBlockAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -869,7 +907,7 @@ fn updateChunk(
         base_sha,
         path,
     ) catch |err| switch (err) {
-        FetchError.HttpError => return skipBlockUntouched(
+        FetchError.HttpError => return skipBlockAfterFetchError(
             allocator,
             fc,
             action,
@@ -899,7 +937,7 @@ fn updateChunk(
         base_sha
     else
         fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockUntouched(
+            FetchError.HttpError => return skipBlockAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -939,7 +977,7 @@ fn updateChunk(
             new_sha,
             path,
         ) catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockUntouched(
+            FetchError.HttpError => return skipBlockAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -1015,6 +1053,8 @@ fn updateChunk(
                     base_line += 1;
                 } else if (std.mem.startsWith(u8, diff_line, "+")) {
                     new_line += 1;
+                } else if (std.mem.eql(u8, diff_line, "\\ No newline at end of file")) {
+                    continue;
                 } else {
                     // Either it's a shared line or the last empty line of the diff
                     std.debug.assert(std.mem.startsWith(u8, diff_line, " ") or diff_lines.peek() == null);
@@ -1106,9 +1146,10 @@ fn updateChunk(
             const config_result = try std.process.run(allocator, ctx.io, .{
                 .argv = &.{ "git", "config", "--get", "merge.conflictstyle" },
             });
-            const conflict_style = std.mem.trim(u8, config_result.stdout, line_whitespace);
-            var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 12);
-            merge_args.appendSliceAssumeCapacity(
+            const conflict_style = std.mem.trim(u8, config_result.stdout, &std.ascii.whitespace);
+            var merge_args = try std.ArrayList([]const u8).initCapacity(allocator, 13);
+            try merge_args.appendSlice(
+                allocator,
                 &[_][]const u8{
                     "git",
                     "merge-file",
@@ -1123,16 +1164,19 @@ fn updateChunk(
             );
 
             if (std.mem.eql(u8, conflict_style, "diff3")) {
-                merge_args.appendAssumeCapacity("--diff3");
+                try merge_args.append(allocator, "--diff3");
             } else if (std.mem.eql(u8, conflict_style, "zdiff3")) {
-                merge_args.appendAssumeCapacity("--zdiff3");
+                try merge_args.append(allocator, "--zdiff3");
             }
 
-            merge_args.appendSliceAssumeCapacity(&[_][]const u8{
-                current_chunk_path,
-                base_chunk_path,
-                new_chunk_path,
-            });
+            try merge_args.appendSlice(
+                allocator,
+                &[_][]const u8{
+                    current_chunk_path,
+                    base_chunk_path,
+                    new_chunk_path,
+                },
+            );
 
             const merge_result = try std.process.run(allocator, ctx.io, .{
                 .argv = merge_args.items,
@@ -1402,10 +1446,7 @@ fn fetchLatestCommitSha(
 ) ![]const u8 {
     const cache_key: ShaCacheKey = .{ .platform = platform, .repo = repo, .ref = ref };
 
-    const gop = try sha_cache.getOrPut(cache_key);
-    if (gop.found_existing) {
-        return gop.value_ptr.*;
-    }
+    if (sha_cache.get(cache_key)) |sha| return sha;
 
     const api_url = switch (platform) {
         .github => try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/commits/{s}", .{ repo, ref }),
@@ -1488,13 +1529,18 @@ fn fetchLatestCommitSha(
     };
 
     const cache_allocator = sha_cache.allocator;
-    gop.key_ptr.* = .{
+    const repo_owned = try cache_allocator.dupe(u8, repo);
+    errdefer cache_allocator.free(repo_owned);
+    const ref_owned = try cache_allocator.dupe(u8, ref);
+    errdefer cache_allocator.free(ref_owned);
+    const owned_key: ShaCacheKey = .{
         .platform = platform,
-        .repo = try cache_allocator.dupe(u8, repo),
-        .ref = try cache_allocator.dupe(u8, ref),
+        .repo = repo_owned,
+        .ref = ref_owned,
     };
     const sha_owned = try cache_allocator.dupe(u8, sha.string);
-    gop.value_ptr.* = sha_owned;
+    errdefer cache_allocator.free(sha_owned);
+    try sha_cache.put(owned_key, sha_owned);
     return sha_owned;
 }
 
@@ -2140,6 +2186,7 @@ pub fn main(init: std.process.Init) !void {
     var whitelist = PlatformFilter.whitelist_default;
     var current_filter: *PlatformFilter = &blacklist;
     var debug_indent: DebugIndent = .off;
+    var verbose = false;
     var name: []const u8 = ".";
     var kind: std.Io.File.Kind = .directory;
 
@@ -2172,6 +2219,8 @@ pub fn main(init: std.process.Init) !void {
             } else {
                 std.debug.panic("Unknown --debug-indent value: {s}\n", .{value});
             }
+        } else if (std.mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
@@ -2190,6 +2239,7 @@ pub fn main(init: std.process.Init) !void {
         .sha_cache = &sha_cache,
         .platform_filter = current_filter.*,
         .debug_indent = debug_indent,
+        .verbose = verbose,
     };
 
     try recursivelyUpdate(ctx, cwd, name, kind);
