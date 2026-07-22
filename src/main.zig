@@ -56,6 +56,7 @@ const GlobalContext = struct {
     platform_filter: PlatformFilter,
     debug_indent: DebugIndent = .off,
     verbose: bool = false,
+    use_gitignore: bool,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -372,6 +373,11 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
     .{ "makefile", FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .{ .default = .{ .width = 8, .char = '\t' } } } },
 });
 
+const TraversalEntry = struct {
+    name: []const u8,
+    kind: std.Io.File.Kind,
+};
+
 fn recursivelyUpdate(
     ctx: GlobalContext,
     parent_dir: std.Io.Dir,
@@ -383,13 +389,94 @@ fn recursivelyUpdate(
 
         var dir = try parent_dir.openDir(ctx.io, name, .{ .iterate = true });
         defer dir.close(ctx.io);
+        const allocator = std.heap.page_allocator;
+        var entries: std.ArrayList(TraversalEntry) = .empty;
+        defer {
+            for (entries.items) |entry| allocator.free(entry.name);
+            entries.deinit(allocator);
+        }
         var it = dir.iterate();
         while (try it.next(ctx.io)) |entry| {
-            try recursivelyUpdate(ctx, dir, entry.name, entry.kind);
+            try entries.append(allocator, .{
+                .name = try allocator.dupe(u8, entry.name),
+                .kind = entry.kind,
+            });
+        }
+
+        var ignored = try gitIgnoredEntries(ctx, allocator, dir, entries.items);
+        defer ignored.deinit();
+        for (entries.items) |entry| {
+            if (!ignored.contains(entry.name)) {
+                try recursivelyUpdate(ctx, dir, entry.name, entry.kind);
+            }
         }
     } else if (kind == .file) {
         try updateFile(ctx, parent_dir, name);
     }
+}
+
+fn gitIgnoredEntries(
+    ctx: GlobalContext,
+    allocator: std.mem.Allocator,
+    dir: std.Io.Dir,
+    entries: []const TraversalEntry,
+) !std.StringHashMap(void) {
+    var ignored = std.StringHashMap(void).init(allocator);
+    errdefer ignored.deinit();
+    if (!ctx.use_gitignore or entries.len == 0) return ignored;
+
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(allocator);
+    for (entries) |entry| {
+        try input.appendSlice(allocator, entry.name);
+        try input.append(allocator, 0);
+    }
+
+    var child = try std.process.spawn(ctx.io, .{
+        .cwd = .{ .dir = dir },
+        .argv = &.{ "git", "check-ignore", "--stdin", "-z" },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    defer child.kill(ctx.io);
+
+    var stdout_task = try ctx.io.concurrent(readStreamAlloc, .{ allocator, ctx.io, child.stdout.? });
+    defer if (stdout_task.cancel(ctx.io)) |bytes| allocator.free(bytes) else |_| {};
+    var stderr_task = try ctx.io.concurrent(readStreamAlloc, .{ allocator, ctx.io, child.stderr.? });
+    defer if (stderr_task.cancel(ctx.io)) |bytes| allocator.free(bytes) else |_| {};
+
+    try child.stdin.?.writeStreamingAll(ctx.io, input.items);
+    child.stdin.?.close(ctx.io);
+    child.stdin = null;
+
+    const stdout = try stdout_task.await(ctx.io);
+    defer allocator.free(stdout);
+    const stderr = try stderr_task.await(ctx.io);
+    defer allocator.free(stderr);
+    switch (try child.wait(ctx.io)) {
+        .exited => |code| if (code > 1) return error.GitCheckIgnoreFailed,
+        else => return error.GitCheckIgnoreFailed,
+    }
+
+    var names = std.mem.splitScalar(u8, stdout, 0);
+    while (names.next()) |ignored_name| {
+        for (entries) |entry| {
+            if (std.mem.eql(u8, entry.name, ignored_name)) {
+                try ignored.put(entry.name, {});
+                break;
+            }
+        }
+    }
+    return ignored;
+}
+
+fn readStreamAlloc(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) ![]u8 {
+    var file_reader: std.Io.File.Reader = .initStreaming(file, io, &.{});
+    return file_reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.ReadFailed => return file_reader.err.?,
+        else => |e| return e,
+    };
 }
 
 fn updateFile(
@@ -2158,9 +2245,11 @@ pub fn main(init: std.process.Init) !void {
     // Find repo root by walking up parent directories looking for .git
     var repo_root = cwd;
     var search_dir = cwd;
+    var repo_root_found = false;
     while (true) {
         if (search_dir.statFile(io, ".git", .{})) |_| {
             repo_root = search_dir;
+            repo_root_found = true;
             break;
         } else |_| {}
         search_dir = search_dir.openDir(io, "..", .{}) catch break;
@@ -2240,6 +2329,7 @@ pub fn main(init: std.process.Init) !void {
         .platform_filter = current_filter.*,
         .debug_indent = debug_indent,
         .verbose = verbose,
+        .use_gitignore = repo_root_found,
     };
 
     try recursivelyUpdate(ctx, cwd, name, kind);
