@@ -571,6 +571,22 @@ fn skipBlockUntouched(
     return .untouched;
 }
 
+fn readCurrentChunk(
+    fc: *FileContext,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    current_line: []const u8,
+    indent: Indent,
+) []const u8 {
+    const current_start = current_line.ptr - lines.buffer.ptr + current_line.len + 1;
+    const end_line = skipToEndLine(
+        fc,
+        lines,
+        indent,
+    );
+    const current_end = end_line.ptr - lines.buffer.ptr - 1;
+    return lines.buffer[current_start..current_end];
+}
+
 fn updateChunk(
     allocator: std.mem.Allocator,
     ctx: GlobalContext,
@@ -879,18 +895,6 @@ fn updateChunk(
         base_indent,
     );
 
-    var current_chunk: []const u8 = undefined;
-    if (action == .track) {
-        const current_start = current_line.ptr - lines.buffer.ptr + current_line.len + 1;
-        const end_line = skipToEndLine(
-            fc,
-            lines,
-            indent,
-        );
-        const current_end = end_line.ptr - lines.buffer.ptr - 1;
-        current_chunk = lines.buffer[current_start..current_end];
-    }
-
     const new_sha = if (action == .get_freeze)
         base_sha
     else
@@ -920,7 +924,7 @@ fn updateChunk(
                 updated_chunk = base_indented.items;
             },
             .track => {
-                updated_chunk = current_chunk;
+                updated_chunk = readCurrentChunk(fc, lines, current_line, indent);
             },
             else => unreachable,
         }
@@ -1079,6 +1083,11 @@ fn updateChunk(
         const new_chunk_path = new_chunk_path_buffer[0..new_chunk_path_len];
 
         // Determine updated chunk bytes
+
+        const current_chunk = if (action == .track)
+            readCurrentChunk(fc, lines, current_line, indent)
+        else
+            undefined;
 
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
