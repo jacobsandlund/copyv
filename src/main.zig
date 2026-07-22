@@ -49,7 +49,9 @@ const PlatformFilter = packed struct {
 
 const GlobalContext = struct {
     arena: *std.heap.ArenaAllocator,
-    cache_dir: std.fs.Dir,
+    io: std.Io,
+    environ: *const std.process.Environ.Map,
+    cache_dir: std.Io.Dir,
     sha_cache: *ShaCache,
     platform_filter: PlatformFilter,
     debug_indent: DebugIndent = .off,
@@ -371,17 +373,17 @@ const file_type_info_map = std.StaticStringMap(FileTypeInfo).initComptime(.{
 
 fn recursivelyUpdate(
     ctx: GlobalContext,
-    parent_dir: std.fs.Dir,
+    parent_dir: std.Io.Dir,
     name: []const u8,
-    kind: std.fs.File.Kind,
+    kind: std.Io.File.Kind,
 ) !void {
     if (kind == .directory) {
         if (name.len > 1 and name[0] == '.') return;
 
-        var dir = try parent_dir.openDir(name, .{ .iterate = true });
-        defer dir.close();
+        var dir = try parent_dir.openDir(ctx.io, name, .{ .iterate = true });
+        defer dir.close(ctx.io);
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(ctx.io)) |entry| {
             try recursivelyUpdate(ctx, dir, entry.name, entry.kind);
         }
     } else if (kind == .file) {
@@ -391,7 +393,7 @@ fn recursivelyUpdate(
 
 fn updateFile(
     ctx: GlobalContext,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     file_name: []const u8,
 ) !void {
     std.log.debug("Updating file: {s}", .{file_name});
@@ -401,13 +403,13 @@ fn updateFile(
 
     const allocator = ctx.arena.allocator();
     defer _ = ctx.arena.reset(.{ .retain_with_limit = 1024 * 1024 });
-    var file = try dir.openFile(file_name, .{});
-    errdefer file.close(); // also closed below
+    var file = try dir.openFile(ctx.io, file_name, .{});
+    errdefer file.close(ctx.io); // also closed below
     var buf: [4096]u8 = undefined;
-    var file_reader = file.reader(&buf);
+    var file_reader = file.reader(ctx.io, &buf);
     var reader = &file_reader.interface;
     const bytes = try reader.allocRemaining(allocator, .unlimited);
-    file.close();
+    file.close(ctx.io);
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var has_update = false;
     var has_conflicts = false;
@@ -457,15 +459,14 @@ fn updateFile(
     }
 
     if (has_update) {
-        try dir.writeFile(.{ .sub_path = file_name, .data = updated_bytes.items });
+        try dir.writeFile(ctx.io, .{ .sub_path = file_name, .data = updated_bytes.items });
     }
     if (has_conflicts) {
-        const prefix_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .cwd_dir = dir,
+        const prefix_result = try std.process.run(allocator, ctx.io, .{
+            .cwd = .{ .dir = dir },
             .argv = &.{ "git", "rev-parse", "--show-prefix" },
         });
-        const prefix = std.mem.trimRight(u8, prefix_result.stdout, &std.ascii.whitespace);
+        const prefix = std.mem.trimEnd(u8, prefix_result.stdout, &std.ascii.whitespace);
         const git_path = try std.fs.path.join(allocator, &.{ prefix, file_name });
         std.log.warn("File has conflicts: {s}\n", .{git_path});
     }
@@ -830,7 +831,7 @@ fn updateChunk(
     const base_sha = if (ref.len == 40)
         ref
     else
-        fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
+        fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
             FetchError.HttpError => return skipBlockUntouched(
                 allocator,
                 fc,
@@ -845,6 +846,7 @@ fn updateChunk(
 
     const base_file = fetchFile(
         allocator,
+        ctx.io,
         ctx.cache_dir,
         platform,
         repo,
@@ -892,7 +894,7 @@ fn updateChunk(
     const new_sha = if (action == .get_freeze)
         base_sha
     else
-        fetchLatestCommitSha(allocator, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
+        fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
             FetchError.HttpError => return skipBlockUntouched(
                 allocator,
                 fc,
@@ -926,6 +928,7 @@ fn updateChunk(
         std.debug.assert(action == .track or (action == .get and ref.len == 40));
         const new_file = fetchFile(
             allocator,
+            ctx.io,
             ctx.cache_dir,
             platform,
             repo,
@@ -954,13 +957,15 @@ fn updateChunk(
 
             var base_file_path_buffer: [1024]u8 = undefined;
             var new_file_path_buffer: [1024]u8 = undefined;
-            const base_file_path = try ctx.cache_dir.realpath(base_file.name, &base_file_path_buffer);
-            const new_file_path = try ctx.cache_dir.realpath(new_file.name, &new_file_path_buffer);
+            const base_file_path_len = try ctx.cache_dir.realPathFile(ctx.io, base_file.name, &base_file_path_buffer);
+            const new_file_path_len = try ctx.cache_dir.realPathFile(ctx.io, new_file.name, &new_file_path_buffer);
+            const base_file_path = base_file_path_buffer[0..base_file_path_len];
+            const new_file_path = new_file_path_buffer[0..new_file_path_len];
 
-            const diff_result = try std.process.Child.run(.{
-                .allocator = allocator,
+            const diff_result = try std.process.run(allocator, ctx.io, .{
                 .argv = &.{ "git", "diff", "--no-index", base_file_path, new_file_path },
-                .max_output_bytes = max_file_bytes,
+                .stdout_limit = .limited(max_file_bytes),
+                .stderr_limit = .limited(max_file_bytes),
             });
 
             // Check if diff is in the chunk
@@ -1064,12 +1069,14 @@ fn updateChunk(
             new_indent,
         );
 
-        try ctx.cache_dir.writeFile(.{ .sub_path = "base", .data = base_indented.items });
-        try ctx.cache_dir.writeFile(.{ .sub_path = "new", .data = new_indented.items });
+        try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "base", .data = base_indented.items });
+        try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "new", .data = new_indented.items });
         var base_chunk_path_buffer: [1024]u8 = undefined;
         var new_chunk_path_buffer: [1024]u8 = undefined;
-        const base_chunk_path = try ctx.cache_dir.realpath("base", &base_chunk_path_buffer);
-        const new_chunk_path = try ctx.cache_dir.realpath("new", &new_chunk_path_buffer);
+        const base_chunk_path_len = try ctx.cache_dir.realPathFile(ctx.io, "base", &base_chunk_path_buffer);
+        const new_chunk_path_len = try ctx.cache_dir.realPathFile(ctx.io, "new", &new_chunk_path_buffer);
+        const base_chunk_path = base_chunk_path_buffer[0..base_chunk_path_len];
+        const new_chunk_path = new_chunk_path_buffer[0..new_chunk_path_len];
 
         // Determine updated chunk bytes
 
@@ -1078,15 +1085,16 @@ fn updateChunk(
         } else {
             std.log.info("Merging file: {s}[{d}]", .{ fc.name, fc.line_number });
             std.debug.assert(action == .track);
-            try ctx.cache_dir.writeFile(.{ .sub_path = "current", .data = current_chunk });
+            try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
-            const current_chunk_path = try ctx.cache_dir.realpath(
+            const current_chunk_path_len = try ctx.cache_dir.realPathFile(
+                ctx.io,
                 "current",
                 &current_chunk_path_buffer,
             );
+            const current_chunk_path = current_chunk_path_buffer[0..current_chunk_path_len];
 
-            const config_result = try std.process.Child.run(.{
-                .allocator = allocator,
+            const config_result = try std.process.run(allocator, ctx.io, .{
                 .argv = &.{ "git", "config", "--get", "merge.conflictstyle" },
             });
             const conflict_style = std.mem.trim(u8, config_result.stdout, line_whitespace);
@@ -1117,15 +1125,15 @@ fn updateChunk(
                 new_chunk_path,
             });
 
-            const merge_result = try std.process.Child.run(.{
-                .allocator = allocator,
+            const merge_result = try std.process.run(allocator, ctx.io, .{
                 .argv = merge_args.items,
-                .max_output_bytes = max_file_bytes,
+                .stdout_limit = .limited(max_file_bytes),
+                .stderr_limit = .limited(max_file_bytes),
             });
             updated_chunk = merge_result.stdout;
 
             switch (merge_result.term) {
-                .Exited => |code| {
+                .exited => |code| {
                     if (code >= 127) {
                         std.debug.panic("{s}[{d}]: Unexpected merge result error code: {d}\n", .{
                             fc.name,
@@ -1376,6 +1384,8 @@ fn parseRange(range_str: []const u8) !GitRange {
 
 fn fetchLatestCommitSha(
     allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: *const std.process.Environ.Map,
     sha_cache: *ShaCache,
     platform: Platform,
     repo: []const u8,
@@ -1398,14 +1408,13 @@ fn fetchLatestCommitSha(
     };
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
-    var client = std.http.Client{ .allocator = allocator };
+    var client = std.http.Client{ .allocator = allocator, .io = io };
 
     var authorization: std.http.Client.Request.Headers.Value = undefined;
 
     switch (platform) {
         .github => {
-            if (std.process.hasEnvVarConstant("GITHUB_TOKEN")) {
-                const token = try std.process.getEnvVarOwned(allocator, "GITHUB_TOKEN");
+            if (environ.get("GITHUB_TOKEN")) |token| {
                 const auth_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
                 authorization = .{ .override = auth_value };
             } else {
@@ -1489,14 +1498,15 @@ const File = struct {
 
 fn fetchFile(
     allocator: std.mem.Allocator,
-    cache_dir: std.fs.Dir,
+    io: std.Io,
+    cache_dir: std.Io.Dir,
     platform: Platform,
     repo: []const u8,
     sha: []const u8,
     path: []const u8,
 ) !File {
     const name = try std.fmt.allocPrint(allocator, "files/{s}/{s}/{s}/{s}", .{ repo, path, sha[0..1], sha[1..] });
-    if (cache_dir.readFileAlloc(allocator, name, max_file_bytes) catch null) |data| {
+    if (cache_dir.readFileAlloc(io, name, allocator, .limited(max_file_bytes)) catch null) |data| {
         return .{ .name = name, .data = data };
     }
 
@@ -1518,7 +1528,7 @@ fn fetchFile(
         ),
     };
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
-    var client = std.http.Client{ .allocator = allocator };
+    var client = std.http.Client{ .allocator = allocator, .io = io };
     const result = try client.fetch(.{
         .location = .{ .url = url },
         .response_writer = &aw.writer,
@@ -1536,9 +1546,9 @@ fn fetchFile(
 
     const data = try aw.toOwnedSlice();
     if (std.fs.path.dirnamePosix(name)) |dir| {
-        try cache_dir.makePath(dir);
+        try cache_dir.createDirPath(io, dir);
     }
-    try cache_dir.writeFile(.{ .sub_path = name, .data = data });
+    try cache_dir.writeFile(io, .{ .sub_path = name, .data = data });
     return .{ .name = name, .data = data };
 }
 
@@ -1573,7 +1583,7 @@ fn normalizeWholeFile(bytes: []const u8, comment: Comment) []const u8 {
                 @panic("normalizeWholeFile: no closing '}' line found in json file");
             }
 
-            result = std.mem.trimRight(u8, result, "\n");
+            result = std.mem.trimEnd(u8, result, "\n");
         },
         .line, .paired => {},
     }
@@ -2062,36 +2072,35 @@ fn matchIndent(
     }
 }
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const cwd = std.fs.cwd();
+pub fn main(init: std.process.Init) !void {
+    const arena = init.arena;
+    const io = init.io;
+    const cwd = std.Io.Dir.cwd();
 
     // Find repo root by walking up parent directories looking for .git
     var repo_root = cwd;
     var search_dir = cwd;
     while (true) {
-        if (search_dir.statFile(".git")) |_| {
+        if (search_dir.statFile(io, ".git", .{})) |_| {
             repo_root = search_dir;
             break;
         } else |_| {}
-        search_dir = search_dir.openDir("..", .{}) catch break;
+        search_dir = search_dir.openDir(io, "..", .{}) catch break;
     }
 
     const cache_dir_name = ".copyv-cache";
-    repo_root.makeDir(cache_dir_name) catch |err| switch (err) {
+    repo_root.createDir(io, cache_dir_name, .default_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    const cache_dir = try repo_root.openDir(cache_dir_name, .{});
+    const cache_dir = try repo_root.openDir(io, cache_dir_name, .{});
 
     const allocator = arena.allocator();
 
     var sha_cache = ShaCache.init(std.heap.page_allocator);
     defer sha_cache.deinit();
 
-    var arg_it = try std.process.argsWithAllocator(allocator);
+    var arg_it = try init.minimal.args.iterateAllocator(allocator);
     defer arg_it.deinit();
     _ = arg_it.next();
 
@@ -2100,7 +2109,7 @@ pub fn main() !void {
     var current_filter: *PlatformFilter = &blacklist;
     var debug_indent: DebugIndent = .off;
     var name: []const u8 = ".";
-    var kind: std.fs.File.Kind = .directory;
+    var kind: std.Io.File.Kind = .directory;
 
     while (arg_it.next()) |arg| {
         const is_platform = std.mem.startsWith(u8, arg, "--platform");
@@ -2135,24 +2144,26 @@ pub fn main() !void {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
             name = arg;
-            const stat = try std.fs.cwd().statFile(arg);
+            const stat = try cwd.statFile(io, arg, .{});
             kind = stat.kind;
             break;
         }
     }
 
     const ctx = GlobalContext{
-        .arena = &arena,
+        .arena = arena,
+        .io = io,
+        .environ = init.environ_map,
         .cache_dir = cache_dir,
         .sha_cache = &sha_cache,
         .platform_filter = current_filter.*,
         .debug_indent = debug_indent,
     };
 
-    try recursivelyUpdate(ctx, std.fs.cwd(), name, kind);
+    try recursivelyUpdate(ctx, cwd, name, kind);
 
     while (arg_it.next()) |arg| {
-        const stat = std.fs.cwd().statFile(arg) catch |err| switch (err) {
+        const stat = cwd.statFile(io, arg, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 if (std.mem.startsWith(u8, arg, "-")) {
                     std.debug.panic("Options must be specified before the first file (or this file isn't found): {s}\n", .{arg});
@@ -2162,6 +2173,6 @@ pub fn main() !void {
             else => |e| return e,
         };
 
-        try recursivelyUpdate(ctx, std.fs.cwd(), arg, stat.kind);
+        try recursivelyUpdate(ctx, cwd, arg, stat.kind);
     }
 }

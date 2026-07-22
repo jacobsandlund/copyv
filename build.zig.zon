@@ -2,7 +2,7 @@
     .name = .copyv,
     .version = "0.0.0",
     .fingerprint = 0x689f6333146887dc,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
