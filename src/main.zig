@@ -389,7 +389,7 @@ fn recursivelyUpdate(
 
         var dir = try parent_dir.openDir(ctx.io, name, .{ .iterate = true });
         defer dir.close(ctx.io);
-        const allocator = std.heap.page_allocator;
+        const allocator = std.heap.smp_allocator;
         var entries: std.ArrayList(TraversalEntry) = .empty;
         defer {
             for (entries.items) |entry| allocator.free(entry.name);
@@ -451,9 +451,7 @@ fn gitIgnoredEntries(
     child.stdin = null;
 
     const stdout = try stdout_task.await(ctx.io);
-    defer allocator.free(stdout);
-    const stderr = try stderr_task.await(ctx.io);
-    defer allocator.free(stderr);
+    _ = try stderr_task.await(ctx.io);
     switch (try child.wait(ctx.io)) {
         .exited => |code| if (code > 1) return error.GitCheckIgnoreFailed,
         else => return error.GitCheckIgnoreFailed,
