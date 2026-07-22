@@ -1,4 +1,5 @@
 const std = @import("std");
+const indent_module = @import("indent.zig");
 
 const Action = enum {
     track,
@@ -20,7 +21,7 @@ const Platform = enum {
     }
 };
 
-const DebugIndent = enum { off, basic, verbose };
+const DebugIndent = indent_module.DebugIndent;
 
 const UpdateMode = enum {
     all,
@@ -125,7 +126,7 @@ const Comment = union(enum) {
     };
 };
 
-const FileTypeIndentDefault = struct { width: u8, char: u8 };
+const FileTypeIndentDefault = indent_module.FileTypeIndentDefault;
 const FileTypeIndent = union(enum) {
     default: FileTypeIndentDefault,
     off,
@@ -149,18 +150,7 @@ const Match = struct {
     comment: Comment,
 };
 
-const Indent = struct {
-    enabled: bool = true,
-
-    // The exact whitespace slice from column 0 to the start of the copyv comment
-    start_slice: []const u8 = "",
-
-    // This is pre-multiplied with `width` (or even allows non-width aligned starting indents)
-    start_width: ?usize = null,
-
-    width: ?usize = null,
-    char: ?u8 = null, // ' ' or '\t'
-};
+const Indent = indent_module.Indent;
 
 const FileSettings = struct {
     freeze: bool = false,
@@ -1039,6 +1029,9 @@ fn updateChunk(
     else
         getLines(base_file.data, base_start, base_end);
 
+    var detected_source_indent = base_indent;
+    indent_module.detect(indentContext(fc), &detected_source_indent, base_bytes);
+
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
         allocator,
@@ -1046,7 +1039,7 @@ fn updateChunk(
         &base_indented,
         base_bytes,
         indent,
-        base_indent,
+        detected_source_indent,
     );
 
     const new_sha = if (action == .get_freeze)
@@ -1230,6 +1223,7 @@ fn updateChunk(
 
             break :new_bytes getLines(new_file.data, new_start, new_end);
         };
+        const shared_new_indent = inheritDetectedIndent(new_indent, detected_source_indent);
         var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
         try matchIndent(
             allocator,
@@ -1237,7 +1231,7 @@ fn updateChunk(
             &new_indented,
             new_bytes,
             indent,
-            new_indent,
+            shared_new_indent,
         );
 
         const content_changed = !std.mem.eql(u8, base_bytes, new_bytes);
@@ -1533,7 +1527,7 @@ fn handleIndentCommands(
                 }
                 if (!indent.enabled) {
                     indent.enabled = true;
-                    getIndent(fc, indent, fc.bytes);
+                    indent_module.detect(indentContext(fc), indent, fc.bytes);
                 }
             } else if (std.mem.eql(u8, peek, "tab") or std.mem.eql(u8, peek, "tabs")) {
                 indent.char = '\t';
@@ -1881,21 +1875,13 @@ fn skipToEndLine(
     };
 }
 
-const shift_count_threshold = 6;
-const indent_char_count_threshold = 10;
-const max_lines_to_check = 1000;
-const indent_char_count_min = 4;
-const max_indent_width = 16;
-
-const StartWidthReason = enum { got_indent, no_whitespace };
-
 fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
     const file_indent = &fc.settings.current_indent;
     var start_width: ?usize = null;
 
     if (file_indent.enabled) {
-        getIndent(fc, file_indent, fc.bytes);
-        start_width = getIndentStart(
+        indent_module.detect(indentContext(fc), file_indent, fc.bytes);
+        start_width = indent_module.getIndentStart(
             indent_slice,
             file_indent.width.?,
         );
@@ -1917,251 +1903,37 @@ fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
     };
 }
 
-fn getIndentStart(
-    whitespace: []const u8,
-    file_type_common_indent: usize,
-) usize {
-    const tab_count = std.mem.count(u8, whitespace, "\t");
-    const space_count = std.mem.count(u8, whitespace, " ");
-
-    // Note: this does not consider spaces that have no impact on
-    // the indentation because they are followed by tabs, but for
-    // well-formed whitespace, that shouldn't be the case.
-    return tab_count * file_type_common_indent + space_count;
-}
-
-fn getIndent(fc: *const FileContext, indent: *Indent, bytes: []const u8) void {
-    const file_type_indent: FileTypeIndentDefault = switch (fc.type_info.indent) {
-        .off => .{ .width = 2, .char = ' ' },
-        .default => |d| d,
+fn indentContext(fc: *const FileContext) indent_module.Context {
+    return .{
+        .file_type = switch (fc.type_info.indent) {
+            .off => .{ .width = 2, .char = ' ' },
+            .default => |default| default,
+        },
+        .debug = fc.debug_indent,
+        .name = fc.name,
+        .line_number = fc.line_number,
     };
-
-    if (indent.char == null) {
-        const CharReason = enum { threshold, majority, file_type_default };
-        var reason: CharReason = undefined;
-
-        var space_count: usize = 0;
-        var tab_count: usize = 0;
-        var i: usize = 0;
-
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
-        const found_char: ?u8 = while (lines.next()) |line| : (i += 1) {
-            if (i >= max_lines_to_check) break null;
-            if (std.mem.startsWith(u8, line, " ")) {
-                space_count += 1;
-                if (space_count >= indent_char_count_threshold) {
-                    reason = .threshold;
-                    break ' ';
-                }
-            } else if (std.mem.startsWith(u8, line, "\t")) {
-                tab_count += 1;
-                if (tab_count >= indent_char_count_threshold) {
-                    reason = .threshold;
-                    break '\t';
-                }
-            }
-        } else null;
-        indent.char = found_char orelse blk: {
-            const seen = tab_count + space_count;
-            if (seen >= indent_char_count_min) {
-                reason = .majority;
-                if (tab_count > space_count) break :blk '\t';
-                if (space_count > tab_count) break :blk ' ';
-            }
-            reason = .file_type_default;
-            break :blk file_type_indent.char;
-        };
-
-        if (fc.debug_indent != .off) {
-            const char_str: []const u8 = if (indent.char.? == ' ') "space" else "tab";
-            std.log.info("{s}[{d}]: indent char={s} ({t}, spaces={d}, tabs={d}, lines={d})", .{
-                fc.name,
-                fc.line_number,
-                char_str,
-                reason,
-                space_count,
-                tab_count,
-                i,
-            });
-        }
-    }
-
-    if (indent.start_width == null) {
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
-        var i: usize = 0;
-        const reason: StartWidthReason = while (lines.next()) |line| : (i += 1) {
-            if (i >= max_lines_to_check) {
-                @branchHint(.unlikely);
-                indent.start_width = 0;
-                break .no_whitespace;
-            }
-            const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
-            if (first_non_whitespace) |index| {
-                indent.start_width = getIndentStart(line[0..index], file_type_indent.width);
-                break .got_indent;
-            }
-        } else blk: {
-            indent.start_width = 0;
-            break :blk .no_whitespace;
-        };
-
-        if (fc.debug_indent != .off) {
-            std.log.info("{s}[{d}]: indent start_width={d} ({t}, lines={d})", .{
-                fc.name,
-                fc.line_number,
-                indent.start_width.?,
-                reason,
-                i,
-            });
-        }
-    }
-
-    if (indent.width == null) {
-        const WidthReason = enum { tab_file_type_default, threshold, max_count, max_count_tie_breaker };
-        var reason: WidthReason = undefined;
-        var indent_counts: [max_indent_width]usize = @splat(0);
-        var deindent_counts: [max_indent_width]usize = @splat(0);
-        var i: usize = 0;
-
-        if (indent.char.? == '\t') {
-            indent.width = file_type_indent.width;
-            reason = .tab_file_type_default;
-        } else {
-            // Bias indent counts towards expected indents as a prior.
-            // We don't bias deindent counts as we use that as a tie breaker
-            indent_counts[file_type_indent.width] += 1;
-
-            var last_indent: usize = 0;
-            var last_line_content: []const u8 = "a";
-            var last_line: []const u8 = "";
-            var lines = std.mem.splitScalar(u8, bytes, '\n');
-            const found_width = while (lines.next()) |line| : (i += 1) {
-                if (i >= max_lines_to_check) break null;
-                const first_non_whitespace = std.mem.indexOfNone(u8, line, line_whitespace);
-                if (first_non_whitespace) |index| {
-                    if (index != last_indent) {
-                        const shift = @as(isize, @intCast(index)) -
-                            @as(isize, @intCast(last_indent));
-
-                        // * Ignore shifts after lines starting with '*' and '-' that
-                        //   might be part of a block comment bulleted list, or a
-                        //   block comment end (*/).
-                        // * Ignore shifts after lines starting with `/*` since
-                        //   that is also probably part of a block comment.
-                        if (last_line_content[0] != '*' and
-                            last_line_content[0] != '-' and
-                            !std.mem.startsWith(u8, last_line_content, "/*"))
-                        {
-                            const abs_shift = @abs(shift);
-                            if (abs_shift < indent_counts.len) {
-                                if (shift > 0) {
-                                    indent_counts[abs_shift] += 1;
-                                } else {
-                                    deindent_counts[abs_shift] += 1;
-                                }
-                                if (fc.debug_indent == .verbose) {
-                                    std.log.info("{s}[{d}]: shift {s}{d} prev: \"{s}\"", .{
-                                        fc.name,
-                                        fc.line_number,
-                                        if (shift > 0) "+" else "-",
-                                        abs_shift,
-                                        last_line,
-                                    });
-                                    std.log.info("{s}[{d}]: shift {s}{d} curr: \"{s}\"", .{
-                                        fc.name,
-                                        fc.line_number,
-                                        if (shift > 0) "+" else "-",
-                                        abs_shift,
-                                        line,
-                                    });
-                                }
-                                if (indent_counts[abs_shift] >= shift_count_threshold) {
-                                    reason = .threshold;
-                                    break abs_shift;
-                                }
-                            }
-                        }
-
-                        last_indent = index;
-                    }
-
-                    last_line_content = line[index..];
-                }
-                last_line = line;
-            } else null;
-            indent.width = found_width orelse blk: {
-                var shift: usize = 0;
-                var max_count: usize = 0;
-                var tie = false;
-                for (indent_counts, 0..) |count, s| {
-                    if (count == max_count) {
-                        tie = max_count > 0;
-                    }
-                    if (count > max_count) {
-                        max_count = count;
-                        shift = s;
-                        tie = false;
-                    }
-                }
-                if (tie) {
-                    // Only use de-indent counts as a tie breaker, as many
-                    // languages may de-indent multiple blocks at once (e.g.
-                    // Python, or Lisps).
-                    shift = 0;
-                    max_count = 0;
-                    for (deindent_counts, 0..) |count, s| {
-                        if (count > max_count) {
-                            max_count = count;
-                            shift = s;
-                        }
-                    }
-                    reason = .max_count_tie_breaker;
-                } else {
-                    reason = .max_count;
-                }
-                break :blk shift;
-            };
-        }
-
-        if (fc.debug_indent != .off) {
-            std.log.info("{s}[{d}]: indent width={d} ({t}, indent_counts={any}, deindent_counts={any} lines={d})", .{
-                fc.name,
-                fc.line_number,
-                indent.width.?,
-                reason,
-                indent_counts,
-                deindent_counts,
-                i,
-            });
-        }
-    }
 }
 
-const max_easy_whitespace_len = 64 - max_indent_width;
-const tabs_followed_by_spaces: [max_easy_whitespace_len + max_indent_width]u8 =
-    @as([max_easy_whitespace_len]u8, @splat('\t')) ++
-    @as([max_indent_width]u8, @splat(' '));
-const spaces: [max_easy_whitespace_len]u8 = @splat(' ');
-
-fn getWhitespace(allocator: std.mem.Allocator, char: u8, len: usize) ![]const u8 {
-    if (len <= max_easy_whitespace_len) {
-        return if (char == ' ') spaces[0..len] else tabs_followed_by_spaces[0..len];
-    } else {
-        const whitespace = try allocator.alloc(u8, len);
-        @memset(whitespace, char);
-        return whitespace;
-    }
+fn inheritDetectedIndent(overrides: Indent, detected: Indent) Indent {
+    var result = overrides;
+    if (result.char == null) result.char = detected.char;
+    if (result.width == null) result.width = detected.width;
+    if (result.start_width == null) result.start_width = detected.start_width;
+    return result;
 }
 
-fn getMixedWhitespace(allocator: std.mem.Allocator, tab_count: usize, space_count: usize) ![]const u8 {
-    if (space_count <= max_indent_width and tab_count <= max_easy_whitespace_len) {
-        return tabs_followed_by_spaces[max_easy_whitespace_len - tab_count .. max_easy_whitespace_len + space_count];
-    } else {
-        const whitespace = try allocator.alloc(u8, space_count + tab_count);
-        @memset(whitespace[0..tab_count], '\t');
-        @memset(whitespace[tab_count..], ' ');
-        return whitespace;
-    }
+test "inheritDetectedIndent fills only unset fields" {
+    const detected = Indent{ .char = ' ', .width = 4, .start_width = 2 };
+    const inherited = inheritDetectedIndent(.{}, detected);
+    try std.testing.expectEqual(@as(?u8, ' '), inherited.char);
+    try std.testing.expectEqual(@as(?usize, 4), inherited.width);
+    try std.testing.expectEqual(@as(?usize, 2), inherited.start_width);
+
+    const overridden = inheritDetectedIndent(.{ .char = '\t', .width = 8 }, detected);
+    try std.testing.expectEqual(@as(?u8, '\t'), overridden.char);
+    try std.testing.expectEqual(@as(?usize, 8), overridden.width);
+    try std.testing.expectEqual(@as(?usize, 2), overridden.start_width);
 }
 
 fn matchIndent(
@@ -2172,125 +1944,18 @@ fn matchIndent(
     desired: Indent,
     current_override: Indent,
 ) !void {
-    if (!desired.enabled) {
-        try updated_bytes.appendSlice(allocator, bytes);
-        return;
-    }
+    return indent_module.match(
+        allocator,
+        indentContext(fc),
+        updated_bytes,
+        bytes,
+        desired,
+        current_override,
+    );
+}
 
-    var current = current_override;
-    getIndent(fc, &current, bytes);
-
-    const current_width = current.width.?;
-    const current_start = current.start_width.?;
-    const current_char = current.char.?;
-    const desired_width = desired.width.?;
-    const desired_start = desired.start_width.?;
-    const desired_char = desired.char.?;
-
-    // Fast path for equal indents
-    if (current_width == desired_width and
-        current_start == desired_start and
-        current_char == desired_char)
-    {
-        try updated_bytes.appendSlice(allocator, bytes);
-        return;
-    }
-
-    // Precompute desired whitespace for the start indent level
-    var desired_tabs: usize = undefined;
-    var desired_spaces: usize = undefined;
-    var desired_whitespace: []const u8 = undefined;
-
-    if (desired_char == ' ') {
-        desired_spaces = desired_start;
-        desired_whitespace = try getWhitespace(allocator, ' ', desired_spaces);
-    } else {
-        desired_tabs = desired_start / desired_width;
-        desired_spaces = desired_start % desired_width;
-        desired_whitespace = try getMixedWhitespace(allocator, desired_tabs, desired_spaces);
-    }
-
-    // Check if the simple (add/remove prefix) path is possible
-    const simple_possible = current_char == desired_char and
-        ((desired_char == ' ' and current_width == desired_width) or (desired_char == '\t' and
-            current_start % current_width == 0 and
-            desired_start % desired_width == 0));
-
-    var simple_add: usize = 0;
-    var simple_remove: usize = 0;
-    var simple_add_bytes: []const u8 = "";
-    if (simple_possible) {
-        var desired_indent: usize = undefined;
-        var current_indent: usize = undefined;
-        if (desired_char == '\t') {
-            desired_indent = desired_start / desired_width;
-            current_indent = current_start / current_width;
-        } else {
-            desired_indent = desired_start;
-            current_indent = current_start;
-        }
-        if (desired_indent > current_indent) {
-            simple_add = desired_indent - current_indent;
-            simple_add_bytes = try getWhitespace(allocator, desired_char, simple_add);
-        } else {
-            simple_remove = current_indent - desired_indent;
-        }
-    }
-
-    var lines = std.mem.splitScalar(u8, bytes, '\n');
-    while (lines.next()) |line| {
-        const line_start = std.mem.indexOfNone(u8, line, line_whitespace) orelse line.len;
-
-        const use_simple = simple_possible and
-            (current_char != ' ' or std.mem.indexOfScalar(u8, line[0..line_start], '\t') == null);
-
-        if (use_simple) {
-            if (simple_add > 0) {
-                if (line_start > 0 or (line.len > 0 and current_start == 0)) {
-                    try updated_bytes.appendSlice(allocator, simple_add_bytes);
-                }
-                // This will leave whitespace in whitespace-only lines
-                try updated_bytes.appendSlice(allocator, line);
-            } else {
-                const start = @min(simple_remove, line_start);
-                // This will leave whitespace in whitespace-only lines
-                try updated_bytes.appendSlice(allocator, line[start..]);
-            }
-        } else {
-            // Complex path for mixed indents or char conversion
-            const tab_count = std.mem.count(u8, line[0..line_start], "\t");
-            const space_count = std.mem.count(u8, line[0..line_start], " ");
-
-            // Note: this does not consider spaces that have no impact on
-            // the indentation because they are followed by tabs, but for
-            // well-formed whitespace, that shouldn't be the case.
-            const line_width = tab_count * current_width + space_count;
-
-            const whitespace = if (line_width > current_start) blk: {
-                const over_start = line_width - current_start;
-                const over_indents = over_start / current_width;
-                const over_spaces = over_start - over_indents * current_width;
-                break :blk if (desired_char == ' ')
-                    try getWhitespace(
-                        allocator,
-                        ' ',
-                        desired_spaces + over_indents * desired_width + over_spaces,
-                    )
-                else
-                    try getMixedWhitespace(allocator, desired_tabs + over_indents, desired_spaces + over_spaces);
-            } else desired_whitespace;
-
-            if (line_start > 0 or (line.len > 0 and current_start == 0)) {
-                // This will leave whitespace in whitespace-only lines
-                try updated_bytes.appendSlice(allocator, whitespace);
-            }
-            try updated_bytes.appendSlice(allocator, line[line_start..]);
-        }
-
-        if (lines.peek() != null) {
-            try updated_bytes.append(allocator, '\n');
-        }
-    }
+test {
+    _ = indent_module;
 }
 
 pub fn main(init: std.process.Init) !void {
