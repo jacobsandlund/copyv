@@ -22,6 +22,35 @@ const Platform = enum {
 
 const DebugIndent = enum { off, basic, verbose };
 
+const UpdateMode = enum {
+    all,
+    changed,
+    changed_lines,
+};
+
+fn shouldUpdate(
+    mode: UpdateMode,
+    action: Action,
+    content_changed: bool,
+    lines_changed: bool,
+) bool {
+    if (action != .track) return true;
+    return switch (mode) {
+        .all => true,
+        .changed => content_changed,
+        .changed_lines => content_changed or lines_changed,
+    };
+}
+
+test "selective update modes" {
+    try std.testing.expect(shouldUpdate(.all, .track, false, false));
+    try std.testing.expect(!shouldUpdate(.changed, .track, false, true));
+    try std.testing.expect(shouldUpdate(.changed, .track, true, false));
+    try std.testing.expect(shouldUpdate(.changed_lines, .track, false, true));
+    try std.testing.expect(!shouldUpdate(.changed_lines, .track, false, false));
+    try std.testing.expect(shouldUpdate(.changed, .get, false, false));
+}
+
 const PlatformFilter = packed struct {
     github: bool = true,
     gitlab: bool = true,
@@ -57,6 +86,7 @@ const GlobalContext = struct {
     debug_indent: DebugIndent = .off,
     verbose: bool = false,
     use_gitignore: bool,
+    update_mode: UpdateMode,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -1040,6 +1070,17 @@ fn updateChunk(
     var has_conflicts = false;
 
     if (std.mem.eql(u8, new_sha, base_sha)) {
+        if (action == .track and ctx.update_mode != .all) {
+            return skipBlockUntouched(
+                allocator,
+                fc,
+                action,
+                updated_bytes,
+                lines,
+                current_line,
+                indent,
+            );
+        }
         new_start = base_start;
         new_end = base_end;
         switch (action) {
@@ -1197,6 +1238,22 @@ fn updateChunk(
             indent,
             new_indent,
         );
+
+        const content_changed = !std.mem.eql(u8, base_bytes, new_bytes);
+        const lines_changed = !whole_file and
+            (base_start != new_start or base_end != new_end);
+        const should_update = shouldUpdate(ctx.update_mode, action, content_changed, lines_changed);
+        if (!should_update) {
+            return skipBlockUntouched(
+                allocator,
+                fc,
+                action,
+                updated_bytes,
+                lines,
+                current_line,
+                indent,
+            );
+        }
 
         try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "base", .data = base_indented.items });
         try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "new", .data = new_indented.items });
@@ -2274,6 +2331,7 @@ pub fn main(init: std.process.Init) !void {
     var current_filter: *PlatformFilter = &blacklist;
     var debug_indent: DebugIndent = .off;
     var verbose = false;
+    var update_mode: UpdateMode = .all;
     var name: []const u8 = ".";
     var kind: std.Io.File.Kind = .directory;
 
@@ -2308,6 +2366,10 @@ pub fn main(init: std.process.Init) !void {
             }
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (std.mem.eql(u8, arg, "--changed")) {
+            update_mode = .changed;
+        } else if (std.mem.eql(u8, arg, "--changed-lines")) {
+            update_mode = .changed_lines;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
@@ -2328,6 +2390,7 @@ pub fn main(init: std.process.Init) !void {
         .debug_indent = debug_indent,
         .verbose = verbose,
         .use_gitignore = repo_root_found,
+        .update_mode = update_mode,
     };
 
     try recursivelyUpdate(ctx, cwd, name, kind);
