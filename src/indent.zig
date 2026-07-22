@@ -211,6 +211,7 @@ pub fn match(
     bytes: []const u8,
     desired: Indent,
     current_override: Indent,
+    suspicious_lines: *std.ArrayList(usize),
 ) !void {
     if (!desired.enabled) return output.appendSlice(allocator, bytes);
     var current = current_override;
@@ -260,8 +261,10 @@ pub fn match(
 
     var previous_original_indent: ?usize = null;
     var previous_output_indent: ?usize = null;
+    var line_number: usize = 0;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     while (lines.next()) |full_line| {
+        line_number += 1;
         const has_return = full_line.len > 0 and full_line[full_line.len - 1] == '\r';
         const line = full_line[0 .. full_line.len - @intFromBool(has_return)];
         const line_start = std.mem.indexOfNone(u8, line, line_whitespace) orelse line.len;
@@ -308,9 +311,7 @@ pub fn match(
             const start_delta = @as(isize, @intCast(desired_start)) - @as(isize, @intCast(current_start));
             const actual_delta = @as(isize, @intCast(output_indent)) - @as(isize, @intCast(line_width));
             if (@abs(actual_delta - start_delta) > desired_width * 2) {
-                std.log.warn("{s}[{d}]: suspicious reindent changed line by {d} columns beyond start delta", .{
-                    context.name, context.line_number, actual_delta - start_delta,
-                });
+                try suspicious_lines.append(allocator, line_number);
             }
             previous_original_indent = line_width;
             previous_output_indent = output_indent;
@@ -320,9 +321,48 @@ pub fn match(
     }
 }
 
+pub const max_reported_line_ranges = 20;
+
+pub fn formatLineRanges(allocator: std.mem.Allocator, line_numbers: []const usize, offset: usize) ![]const u8 {
+    std.debug.assert(line_numbers.len != 0);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var buffer: [48]u8 = undefined;
+    var i: usize = 0;
+    var ranges: usize = 0;
+    while (i < line_numbers.len) {
+        var j = i;
+        while (j + 1 < line_numbers.len and line_numbers[j + 1] == line_numbers[j] + 1) j += 1;
+        if (ranges == max_reported_line_ranges) {
+            var remaining: usize = 0;
+            while (i < line_numbers.len) {
+                var k = i;
+                while (k + 1 < line_numbers.len and line_numbers[k + 1] == line_numbers[k] + 1) k += 1;
+                remaining += 1;
+                i = k + 1;
+            }
+            try out.appendSlice(allocator, std.fmt.bufPrint(&buffer, ", and {d} more", .{remaining}) catch unreachable);
+            break;
+        }
+        if (ranges > 0) try out.appendSlice(allocator, ", ");
+        const start = line_numbers[i] + offset;
+        const end = line_numbers[j] + offset;
+        const piece = if (start == end)
+            std.fmt.bufPrint(&buffer, "{d}", .{start}) catch unreachable
+        else
+            std.fmt.bufPrint(&buffer, "{d}-{d}", .{ start, end }) catch unreachable;
+        try out.appendSlice(allocator, piece);
+        ranges += 1;
+        i = j + 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 fn runMatch(bytes: []const u8, desired: Indent, current: Indent) ![]const u8 {
+    var suspicious: std.ArrayList(usize) = .empty;
+    defer suspicious.deinit(std.testing.allocator);
     var output: std.ArrayList(u8) = .empty;
-    try match(std.testing.allocator, .{ .file_type = .{ .width = 4, .char = ' ' } }, &output, bytes, desired, current);
+    try match(std.testing.allocator, .{ .file_type = .{ .width = 4, .char = ' ' } }, &output, bytes, desired, current, &suspicious);
     return output.toOwnedSlice(std.testing.allocator);
 }
 
@@ -472,6 +512,57 @@ test "carriage returns survive reindenting" {
     const shifted = try runMatch("one\r\n\r\n", .{ .width = 2, .char = ' ', .start_width = 2 }, .{ .width = 2, .char = ' ', .start_width = 0 });
     defer std.testing.allocator.free(shifted);
     try std.testing.expectEqualStrings("  one\r\n\r\n", shifted);
+}
+
+test "match collects suspicious chunk-relative line numbers" {
+    const context: Context = .{ .file_type = .{ .width = 4, .char = ' ' } };
+    var suspicious: std.ArrayList(usize) = .empty;
+    defer suspicious.deinit(std.testing.allocator);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try match(
+        std.testing.allocator,
+        context,
+        &output,
+        "a\n  b\n    c\n      d\n      e\n",
+        .{ .width = 8, .char = ' ', .start_width = 0 },
+        .{ .width = 2, .char = ' ', .start_width = 0 },
+        &suspicious,
+    );
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5 }, suspicious.items);
+
+    suspicious.clearRetainingCapacity();
+    var clean: std.ArrayList(u8) = .empty;
+    defer clean.deinit(std.testing.allocator);
+    try match(
+        std.testing.allocator,
+        context,
+        &clean,
+        "  call(\n    UNSAFE_BUFFERS(\n                           aligned);\n",
+        .{ .width = 4, .char = ' ', .start_width = 4 },
+        .{ .width = 2, .char = ' ', .start_width = 2 },
+        &suspicious,
+    );
+    try std.testing.expectEqual(0, suspicious.items.len);
+}
+
+test "formatLineRanges compacts runs and applies the offset" {
+    const mixed = try formatLineRanges(std.testing.allocator, &.{ 1, 3, 4, 5, 9 }, 0);
+    defer std.testing.allocator.free(mixed);
+    try std.testing.expectEqualStrings("1, 3-5, 9", mixed);
+
+    const offset = try formatLineRanges(std.testing.allocator, &.{ 4, 5 }, 10);
+    defer std.testing.allocator.free(offset);
+    try std.testing.expectEqualStrings("14-15", offset);
+}
+
+test "formatLineRanges caps the number of reported ranges" {
+    var line_numbers: [max_reported_line_ranges + 5]usize = undefined;
+    for (&line_numbers, 0..) |*n, i| n.* = i * 2 + 1;
+    const capped = try formatLineRanges(std.testing.allocator, &line_numbers, 0);
+    defer std.testing.allocator.free(capped);
+    try std.testing.expect(std.mem.startsWith(u8, capped, "1, 3, 5"));
+    try std.testing.expect(std.mem.endsWith(u8, capped, ", and 5 more"));
 }
 
 test "whitespace-only lines keep adjusted whitespace" {

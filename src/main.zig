@@ -747,6 +747,8 @@ fn updateChunk(
     }
 
     const match = maybe_match.?;
+    // skipToEndLine advances fc.line_number past the block; keep the begin line for reporting
+    const begin_line_number = fc.line_number;
     const prefix = match.prefix;
     var indent: Indent = getChunkIndent(fc, match.indent);
     var base_indent: Indent = fc.settings.base_indent;
@@ -1032,6 +1034,7 @@ fn updateChunk(
     var detected_source_indent = base_indent;
     indent_module.detect(indentContext(fc), &detected_source_indent, base_bytes);
 
+    var base_suspicious: std.ArrayList(usize) = .empty;
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
     try matchIndent(
         allocator,
@@ -1040,6 +1043,7 @@ fn updateChunk(
         base_bytes,
         indent,
         detected_source_indent,
+        &base_suspicious,
     );
 
     const new_sha = if (action == .get_freeze)
@@ -1062,6 +1066,8 @@ fn updateChunk(
     var new_end: usize = undefined;
     var updated_chunk: []const u8 = undefined;
     var has_conflicts = false;
+    var suspicious_lines: []const usize = &.{};
+    var block_changed = false;
 
     if (std.mem.eql(u8, new_sha, base_sha)) {
         if (action == .track and ctx.update_mode != .all) {
@@ -1080,6 +1086,8 @@ fn updateChunk(
         switch (action) {
             .get, .get_freeze => {
                 updated_chunk = base_indented.items;
+                suspicious_lines = base_suspicious.items;
+                block_changed = true;
             },
             .track => {
                 updated_chunk = readCurrentChunk(fc, lines, current_line, indent);
@@ -1224,6 +1232,7 @@ fn updateChunk(
             break :new_bytes getLines(new_file.data, new_start, new_end);
         };
         const shared_new_indent = inheritDetectedIndent(new_indent, detected_source_indent);
+        var new_suspicious: std.ArrayList(usize) = .empty;
         var new_indented = try std.ArrayList(u8).initCapacity(allocator, new_bytes.len);
         try matchIndent(
             allocator,
@@ -1232,6 +1241,7 @@ fn updateChunk(
             new_bytes,
             indent,
             shared_new_indent,
+            &new_suspicious,
         );
 
         const content_changed = !std.mem.eql(u8, base_bytes, new_bytes);
@@ -1268,8 +1278,10 @@ fn updateChunk(
 
         if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
             updated_chunk = new_indented.items;
+            suspicious_lines = new_suspicious.items;
+            block_changed = action == .get or !std.mem.eql(u8, current_chunk, new_indented.items);
         } else {
-            std.log.info("Merging file: {s}[{d}]", .{ fc.name, fc.line_number });
+            std.log.info("Merging file: {s}[{d}]", .{ fc.name, begin_line_number });
             std.debug.assert(action == .track);
             try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "current", .data = current_chunk });
             var current_chunk_path_buffer: [1024]u8 = undefined;
@@ -1321,6 +1333,8 @@ fn updateChunk(
                 .stderr_limit = .limited(max_file_bytes),
             });
             updated_chunk = merge_result.stdout;
+            suspicious_lines = new_suspicious.items;
+            block_changed = !std.mem.eql(u8, updated_chunk, current_chunk);
 
             switch (merge_result.term) {
                 .exited => |code| {
@@ -1443,6 +1457,15 @@ fn updateChunk(
     };
     try appendTag(allocator, updated_bytes, indent, match.comment, begin);
     try updated_bytes.append(allocator, '\n');
+    if (block_changed and suspicious_lines.len > 0) {
+        const first_body_line = std.mem.count(u8, updated_bytes.items, "\n") + 1;
+        const ranges = try indent_module.formatLineRanges(allocator, suspicious_lines, first_body_line - 1);
+        std.log.warn("{s}[{d}]: suspicious reindent (indent shifted beyond start delta) near lines {s}", .{
+            fc.name,
+            begin_line_number,
+            ranges,
+        });
+    }
     try updated_bytes.appendSlice(allocator, updated_chunk);
     try updated_bytes.append(allocator, '\n');
     try appendTag(allocator, updated_bytes, indent, fc.type_info.comments[0], "end");
@@ -1943,6 +1966,7 @@ fn matchIndent(
     bytes: []const u8,
     desired: Indent,
     current_override: Indent,
+    suspicious_lines: *std.ArrayList(usize),
 ) !void {
     return indent_module.match(
         allocator,
@@ -1951,6 +1975,7 @@ fn matchIndent(
         bytes,
         desired,
         current_override,
+        suspicious_lines,
     );
 }
 
@@ -1967,13 +1992,31 @@ pub fn main(init: std.process.Init) !void {
     var repo_root = cwd;
     var search_dir = cwd;
     var repo_root_found = false;
+    var current_path_buffer: [4096]u8 = undefined;
+    var parent_path_buffer: [4096]u8 = undefined;
+    var current_path_len = cwd.realPathFile(io, ".", &current_path_buffer) catch 0;
     while (true) {
         if (search_dir.statFile(io, ".git", .{})) |_| {
             repo_root = search_dir;
             repo_root_found = true;
             break;
         } else |_| {}
-        search_dir = search_dir.openDir(io, "..", .{}) catch break;
+        const parent = search_dir.openDir(io, "..", .{}) catch break;
+        const parent_path_len = parent.realPathFile(io, ".", &parent_path_buffer) catch 0;
+        // At the filesystem root ".." resolves to the same directory forever
+        const at_root = std.mem.eql(
+            u8,
+            current_path_buffer[0..current_path_len],
+            parent_path_buffer[0..parent_path_len],
+        );
+        if (search_dir.handle != cwd.handle) search_dir.close(io);
+        if (at_root) {
+            parent.close(io);
+            break;
+        }
+        search_dir = parent;
+        current_path_len = parent_path_len;
+        @memcpy(current_path_buffer[0..current_path_len], parent_path_buffer[0..current_path_len]);
     }
 
     const cache_dir_name = ".copyv-cache";
