@@ -2075,9 +2075,13 @@ pub fn main(init: std.process.Init) !void {
             }
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
-        } else if (std.mem.eql(u8, arg, "--changed")) {
+        } else if (std.mem.eql(u8, arg, "--changed") or
+            std.mem.eql(u8, arg, "--changes"))
+        {
             update_mode = .changed;
-        } else if (std.mem.eql(u8, arg, "--changed-or-moved")) {
+        } else if (std.mem.eql(u8, arg, "--changed-or-moved") or
+            std.mem.eql(u8, arg, "--changes-or-moves"))
+        {
             update_mode = .changed_or_moved;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
