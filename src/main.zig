@@ -1,5 +1,8 @@
 const std = @import("std");
 const indent_module = @import("indent.zig");
+const eol_module = @import("eol.zig");
+
+const Eol = eol_module.Eol;
 
 const Action = enum {
     track,
@@ -88,6 +91,7 @@ const GlobalContext = struct {
     verbose: bool = false,
     use_gitignore: bool,
     update_mode: UpdateMode,
+    force_eol: ?Eol = null,
 };
 
 const ShaCacheKey = struct { platform: Platform, repo: []const u8, ref: []const u8 };
@@ -166,6 +170,7 @@ const FileContext = struct {
     line_number: usize,
     settings: FileSettings,
     debug_indent: DebugIndent,
+    eol: Eol,
 };
 
 const text_file_type_info = FileTypeInfo{ .comments = &[_]Comment{.{ .line = "#" }}, .indent = .off };
@@ -543,6 +548,7 @@ fn updateFile(
             },
         },
         .debug_indent = ctx.debug_indent,
+        .eol = ctx.force_eol orelse eol_module.detect(bytes),
     };
 
     while (lines.next()) |line| : (fc.line_number += 1) {
@@ -605,7 +611,7 @@ fn mightMatchTag(line: []const u8) bool {
     return std.mem.indexOf(u8, line, "copyv") != null;
 }
 
-const line_whitespace = " \t";
+const line_whitespace = " \t\r";
 
 fn matchesTag(
     fc: *const FileContext,
@@ -1026,10 +1032,13 @@ fn updateChunk(
         ),
         else => return err,
     };
+    // Chunk contents are canonicalized to LF so diffing and merging never see
+    // line-ending mismatches; the file's ending is restored at write-back.
+    const base_data = try eol_module.convert(allocator, base_file.data, .lf);
     const base_bytes = if (whole_file)
-        normalizeWholeFile(base_file.data, match.comment)
+        normalizeWholeFile(base_data, match.comment)
     else
-        getLines(base_file.data, base_start, base_end);
+        getLines(base_data, base_start, base_end);
 
     var detected_source_indent = base_indent;
     indent_module.detect(indentContext(fc), &detected_source_indent, base_bytes);
@@ -1090,7 +1099,10 @@ fn updateChunk(
                 block_changed = true;
             },
             .track => {
-                updated_chunk = readCurrentChunk(fc, lines, current_line, indent);
+                updated_chunk = try eol_module.canonicalizeChunk(
+                    allocator,
+                    readCurrentChunk(fc, lines, current_line, indent),
+                );
             },
             else => unreachable,
         }
@@ -1117,8 +1129,9 @@ fn updateChunk(
             else => return err,
         };
 
+        const new_data = try eol_module.convert(allocator, new_file.data, .lf);
         const new_bytes = if (whole_file)
-            normalizeWholeFile(new_file.data, match.comment)
+            normalizeWholeFile(new_data, match.comment)
         else new_bytes: {
             new_start = 0;
             new_end = 0;
@@ -1229,7 +1242,7 @@ fn updateChunk(
                 }
             }
 
-            break :new_bytes getLines(new_file.data, new_start, new_end);
+            break :new_bytes getLines(new_data, new_start, new_end);
         };
         const shared_new_indent = inheritDetectedIndent(new_indent, detected_source_indent);
         var new_suspicious: std.ArrayList(usize) = .empty;
@@ -1272,7 +1285,10 @@ fn updateChunk(
         // Determine updated chunk bytes
 
         const current_chunk = if (action == .track)
-            readCurrentChunk(fc, lines, current_line, indent)
+            try eol_module.canonicalizeChunk(
+                allocator,
+                readCurrentChunk(fc, lines, current_line, indent),
+            )
         else
             undefined;
 
@@ -1456,7 +1472,7 @@ fn updateChunk(
         ),
     };
     try appendTag(allocator, updated_bytes, indent, match.comment, begin);
-    try updated_bytes.append(allocator, '\n');
+    try updated_bytes.appendSlice(allocator, fc.eol.bytes());
     if (block_changed and suspicious_lines.len > 0) {
         const first_body_line = std.mem.count(u8, updated_bytes.items, "\n") + 1;
         const ranges = try indent_module.formatLineRanges(allocator, suspicious_lines, first_body_line - 1);
@@ -1466,10 +1482,12 @@ fn updateChunk(
             ranges,
         });
     }
-    try updated_bytes.appendSlice(allocator, updated_chunk);
-    try updated_bytes.append(allocator, '\n');
+    try updated_bytes.appendSlice(allocator, try eol_module.convert(allocator, updated_chunk, fc.eol));
+    try updated_bytes.appendSlice(allocator, fc.eol.bytes());
     try appendTag(allocator, updated_bytes, indent, fc.type_info.comments[0], "end");
-    try maybeAppendNewline(allocator, updated_bytes, lines);
+    if (lines.peek() != null) {
+        try updated_bytes.appendSlice(allocator, fc.eol.bytes());
+    }
 
     if (has_conflicts) {
         return .updated_with_conflicts;
@@ -1870,7 +1888,7 @@ fn skipToEndLine(
         if (maybe_match) |match| {
             if (!std.mem.eql(u8, match.indent, indent.start_slice)) continue;
 
-            const payload = line[match.prefix.len..];
+            const payload = std.mem.trimEnd(u8, line[match.prefix.len..], line_whitespace);
             var line_args = std.mem.splitScalar(u8, payload, ' ');
             const first_arg = line_args.first();
             if (std.mem.startsWith(u8, first_arg, "end")) {
@@ -1981,6 +1999,7 @@ fn matchIndent(
 
 test {
     _ = indent_module;
+    _ = eol_module;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -2041,6 +2060,7 @@ pub fn main(init: std.process.Init) !void {
     var debug_indent: DebugIndent = .off;
     var verbose = false;
     var update_mode: UpdateMode = .all;
+    var force_eol: ?Eol = null;
     var name: []const u8 = ".";
     var kind: std.Io.File.Kind = .directory;
 
@@ -2083,6 +2103,10 @@ pub fn main(init: std.process.Init) !void {
             std.mem.eql(u8, arg, "--changes-or-moves"))
         {
             update_mode = .changed_or_moved;
+        } else if (std.mem.eql(u8, arg, "--force-lf")) {
+            force_eol = .lf;
+        } else if (std.mem.eql(u8, arg, "--force-crlf")) {
+            force_eol = .crlf;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.panic("Unknown option: {s}\n", .{arg});
         } else {
@@ -2091,6 +2115,15 @@ pub fn main(init: std.process.Init) !void {
             kind = stat.kind;
             break;
         }
+    }
+
+    if (force_eol != null and update_mode != .all) {
+        std.debug.panic(
+            "--force-lf/--force-crlf cannot be combined with --changed or " ++
+                "--changed-or-moved: those modes leave unchanged chunks untouched, " ++
+                "so stale line endings would not be rewritten\n",
+            .{},
+        );
     }
 
     const ctx = GlobalContext{
@@ -2104,6 +2137,7 @@ pub fn main(init: std.process.Init) !void {
         .verbose = verbose,
         .use_gitignore = repo_root_found,
         .update_mode = update_mode,
+        .force_eol = force_eol,
     };
 
     try recursivelyUpdate(ctx, cwd, name, kind);

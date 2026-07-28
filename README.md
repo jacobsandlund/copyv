@@ -54,6 +54,15 @@ changed. Use `copyv --changed-or-moved` to also rewrite chunks whose source
 moved to different line numbers, while still ignoring SHA-only changes. Options
 must appear before file arguments.
 
+Chunks match the line endings of the file they live in: copyv detects whether
+the destination file predominantly uses LF or CRLF and converts copied code to
+that ending, so a CRLF source never introduces mixed line endings into an LF
+file (or vice versa). Diffing and merging ignore line-ending differences.
+Use `copyv --force-lf` or `copyv --force-crlf` to override the detection and
+write every visited chunk with that ending. These cannot be combined with
+`--changed` or `--changed-or-moved`, since those modes leave unchanged chunks
+untouched and would skip rewriting stale line endings.
+
 This merges in all the changes up to the latest, including [commit `286628d`](https://github.com/nvim-telescope/telescope.nvim/commit/286628d9f2056cc71d3f3871b5ca4f3209de0dbf) which adds a missing `<leader>`, and updates the SHA:
 
 ```diff

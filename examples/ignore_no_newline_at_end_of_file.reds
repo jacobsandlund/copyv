@@ -1,4 +1,4 @@
-;-- copyv: https://github.com/red/red/blob/cc32e2652047d9a3bc64bb594374c0f443b77d4c/runtime/lexer-transitions.reds#L1-L106 begin
+;-- copyv: https://github.com/red/red/blob/66eab045df4e849de3bd6e9cef4334ab1002c20b/runtime/lexer-transitions.reds#L1-L107 begin
 Red/System [
 	Note: "Auto-generated lexical scanner transitions table"
 ]
@@ -51,6 +51,7 @@ Red/System [
 	S_TAG_STR
 	S_TAG_STR2
 	S_SIGN
+	S_SIGN_W
 	S_DOTWORD
 	S_DOTDEC
 	S_WORD_1ST
