@@ -30,18 +30,58 @@ pub fn getIndentStart(whitespace: []const u8, width: usize) usize {
 }
 
 pub fn detect(context: Context, indent: *Indent, bytes: []const u8) void {
-    if (indent.char == null) detectChar(context, indent, bytes);
-    if (indent.start_width == null) detectStart(context, indent, bytes);
-    if (indent.width == null) detectWidth(context, indent, bytes);
+    detectInFile(context, indent, bytes, bytes);
 }
 
-fn detectChar(context: Context, indent: *Indent, bytes: []const u8) void {
+/// Detects indentation for `block`, a subslice of `file` starting at a line
+/// boundary. `start_width` comes from the block itself, while `char` and
+/// `width` scan the block's lines first and then the rest of the file
+/// (wrapping around to line 1), so a short block inherits evidence from its
+/// surroundings instead of falling back to the file type default.
+pub fn detectInFile(context: Context, indent: *Indent, file: []const u8, block: []const u8) void {
+    const offset = block.ptr - file.ptr;
+    std.debug.assert(offset + block.len <= file.len);
+    if (indent.char == null) detectChar(context, indent, file, offset);
+    if (indent.start_width == null) detectStart(context, indent, block);
+    if (indent.width == null) detectWidth(context, indent, file, offset);
+}
+
+/// Yields lines of `bytes[start..]`, then wraps around to the lines of
+/// `bytes[0..start]`. `just_wrapped` is true while the first wrapped line is
+/// current, letting scans reset any line-to-line state at the seam.
+const WrappingLines = struct {
+    tail: std.mem.SplitIterator(u8, .scalar),
+    head: ?std.mem.SplitIterator(u8, .scalar),
+    in_head: bool = false,
+    just_wrapped: bool = false,
+
+    fn init(bytes: []const u8, start: usize) WrappingLines {
+        std.debug.assert(start == 0 or bytes[start - 1] == '\n');
+        return .{
+            .tail = std.mem.splitScalar(u8, bytes[start..], '\n'),
+            .head = if (start == 0) null else std.mem.splitScalar(u8, bytes[0 .. start - 1], '\n'),
+        };
+    }
+
+    fn next(self: *WrappingLines) ?[]const u8 {
+        self.just_wrapped = false;
+        if (!self.in_head) {
+            if (self.tail.next()) |line| return line;
+            self.in_head = true;
+            self.just_wrapped = true;
+        }
+        if (self.head) |*head| if (head.next()) |line| return line;
+        return null;
+    }
+};
+
+fn detectChar(context: Context, indent: *Indent, bytes: []const u8, start: usize) void {
     const Reason = enum { threshold, majority, file_type_default };
     var reason: Reason = undefined;
     var spaces_count: usize = 0;
     var tabs_count: usize = 0;
     var i: usize = 0;
-    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    var lines: WrappingLines = .init(bytes, start);
     const found: ?u8 = while (lines.next()) |line| : (i += 1) {
         if (i >= max_lines_to_check) break null;
         if (std.mem.startsWith(u8, line, " ")) {
@@ -94,7 +134,7 @@ fn detectStart(context: Context, indent: *Indent, bytes: []const u8) void {
     }
 }
 
-fn detectWidth(context: Context, indent: *Indent, bytes: []const u8) void {
+fn detectWidth(context: Context, indent: *Indent, bytes: []const u8, start: usize) void {
     const Reason = enum { tab_file_type_default, threshold, insufficient_evidence, max_count, max_count_tie_breaker, tie_file_type_default };
     var reason: Reason = undefined;
     var indent_counts: [max_indent_width]usize = @splat(0);
@@ -104,15 +144,16 @@ fn detectWidth(context: Context, indent: *Indent, bytes: []const u8) void {
         indent.width = context.file_type.width;
         reason = .tab_file_type_default;
     } else {
-        var last_indent: usize = 0;
+        var last_indent: ?usize = null;
         var last_content: []const u8 = "a";
         var last_line: []const u8 = "";
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var lines: WrappingLines = .init(bytes, start);
         const threshold_width = while (lines.next()) |line| : (i += 1) {
             if (i >= max_lines_to_check) break null;
+            if (lines.just_wrapped) last_indent = null;
             if (std.mem.indexOfNone(u8, line, line_whitespace)) |index| {
-                if (index != last_indent) {
-                    const shift = @as(isize, @intCast(index)) - @as(isize, @intCast(last_indent));
+                if (last_indent != null and index != last_indent.?) {
+                    const shift = @as(isize, @intCast(index)) - @as(isize, @intCast(last_indent.?));
                     if (last_content[0] != '*' and last_content[0] != '-' and
                         !std.mem.startsWith(u8, last_content, "/*"))
                     {
@@ -133,8 +174,8 @@ fn detectWidth(context: Context, indent: *Indent, bytes: []const u8) void {
                             }
                         }
                     }
-                    last_indent = index;
                 }
+                last_indent = index;
                 last_content = line[index..];
             }
             last_line = line;
@@ -492,6 +533,64 @@ test "detection stops at max_lines_to_check" {
     detect(.{ .file_type = .{ .width = 4, .char = ' ' } }, &indent, ("x\n" ** max_lines_to_check) ++ ("r\n   a\n" ** 6));
     try std.testing.expectEqual(' ', indent.char.?);
     try std.testing.expectEqual(4, indent.width.?);
+}
+
+test "short block inherits width evidence from the rest of the file" {
+    const file =
+        "function a() {\n" ++
+        "    one;\n" ++
+        "    if (x) {\n" ++
+        "        two;\n" ++
+        "    }\n" ++
+        "}\n" ++
+        "function target() {\n" ++
+        "    return x ||\n" ++
+        "        y;\n" ++
+        "}\n";
+    const offset = std.mem.indexOf(u8, file, "function target").?;
+    var block_only: Indent = .{};
+    detect(.{ .file_type = .{ .width = 2, .char = ' ' } }, &block_only, file[offset..]);
+    try std.testing.expectEqual(2, block_only.width.?);
+
+    var indent: Indent = .{};
+    detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[offset..]);
+    try std.testing.expectEqual(4, indent.width.?);
+    try std.testing.expectEqual(0, indent.start_width.?);
+}
+
+test "block start width comes from the block, not the file" {
+    const file = "class A {\n    method() {\n        body;\n    }\n}\n";
+    const offset = std.mem.indexOf(u8, file, "    method").?;
+    const end = std.mem.indexOf(u8, file, "\n}").? + 1;
+    var indent: Indent = .{};
+    detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[offset..end]);
+    try std.testing.expectEqual(4, indent.start_width.?);
+}
+
+test "wrap seam between file end and file start is not counted as a shift" {
+    const head = "   a\nr\n   a\nr\n   a\nr\n";
+    const file = head ++ "x\ny\n";
+    var indent: Indent = .{};
+    detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[head.len..]);
+    try std.testing.expectEqual(2, indent.width.?);
+}
+
+test "block with strong evidence wins over a differently indented file" {
+    const head = "r\n  a\n" ** 8;
+    const block = "r\n    a\n" ** 6;
+    const file = head ++ block;
+    var indent: Indent = .{};
+    detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[head.len..]);
+    try std.testing.expectEqual(4, indent.width.?);
+}
+
+test "block char falls back to surrounding file evidence" {
+    const head = "r\n\ta\n" ** 5;
+    const file = head ++ "flat\n\tb\n";
+    var indent: Indent = .{};
+    detectInFile(.{ .file_type = .{ .width = 8, .char = ' ' } }, &indent, file, file[head.len..]);
+    try std.testing.expectEqual('\t', indent.char.?);
+    try std.testing.expectEqual(8, indent.width.?);
 }
 
 test "simple tab add and remove" {

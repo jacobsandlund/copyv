@@ -1041,7 +1041,7 @@ fn updateChunk(
         getLines(base_data, base_start, base_end);
 
     var detected_source_indent = base_indent;
-    indent_module.detect(indentContext(fc), &detected_source_indent, base_bytes);
+    indent_module.detectInFile(indentContext(fc), &detected_source_indent, base_data, base_bytes);
 
     var base_suspicious: std.ArrayList(usize) = .empty;
     var base_indented = try std.ArrayList(u8).initCapacity(allocator, base_bytes.len);
