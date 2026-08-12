@@ -1,4 +1,4 @@
-// This example verifies that when the chunk lies entirely after every diff
+// This example verifies that when the slice lies entirely after every diff
 // hunk between the base and the new file, the line-range shift is applied
 // in the correct direction (i.e. new = base + delta, not base - delta).
 // copyv: https://github.com/sqlite/sqlite/blob/7a0a0a22e774a7f6bc9e0cb14a18a33b396654d6/src/parse.y#L2115-L2160 begin

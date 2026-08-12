@@ -42,25 +42,30 @@ vim.keymap.set('n', 'fh', builtin.help_tags, {})
 -- copyv: end
 ```
 
+The `begin`/`end` pair delimits a **slice**: a region of a file that `copyv`
+keeps in sync with its source. A slice is whatever the URL selects — part of a
+function, one whole function, several of them, or the entire file when the URL
+carries no line numbers.
+
 Later, when the upstream config improves, run `copyv` (no args) to update all tagged code:
 
 ```console
 $ copyv
 ```
 
-Use `copyv --changed` to rewrite only chunks whose source content changed. This
-leaves a chunk completely untouched when only its commit SHA or line numbers
-changed. Use `copyv --changed-or-moved` to also rewrite chunks whose source
+Use `copyv --changed` to rewrite only slices whose source content changed. This
+leaves a slice completely untouched when only its commit SHA or line numbers
+changed. Use `copyv --changed-or-moved` to also rewrite slices whose source
 moved to different line numbers, while still ignoring SHA-only changes. Options
 must appear before file arguments.
 
-Chunks match the line endings of the file they live in: copyv detects whether
+Slices match the line endings of the file they live in: copyv detects whether
 the destination file predominantly uses LF or CRLF and converts copied code to
 that ending, so a CRLF source never introduces mixed line endings into an LF
 file (or vice versa). Diffing and merging ignore line-ending differences.
 Use `copyv --force-lf` or `copyv --force-crlf` to override the detection and
-write every visited chunk with that ending. These cannot be combined with
-`--changed` or `--changed-or-moved`, since those modes leave unchanged chunks
+write every visited slice with that ending. These cannot be combined with
+`--changed` or `--changed-or-moved`, since those modes leave unchanged slices
 untouched and would skip rewriting stale line endings.
 
 This merges in all the changes up to the latest, including [commit `286628d`](https://github.com/nvim-telescope/telescope.nvim/commit/286628d9f2056cc71d3f3871b5ca4f3209de0dbf) which adds a missing `<leader>`, and updates the SHA:

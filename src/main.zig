@@ -554,9 +554,9 @@ fn updateFile(
     while (lines.next()) |line| : (fc.line_number += 1) {
         if (mightMatchTag(line)) {
             if (ctx.verbose) {
-                std.log.info("Checking possible chunk: {s}[{d}]", .{ fc.name, fc.line_number });
+                std.log.info("Checking possible slice: {s}[{d}]", .{ fc.name, fc.line_number });
             }
-            switch (try updateChunk(
+            switch (try updateSlice(
                 allocator,
                 ctx,
                 &fc,
@@ -572,7 +572,7 @@ fn updateFile(
                     has_conflicts = true;
                 },
                 .untouched => {},
-                .not_a_chunk => {
+                .not_a_slice => {
                     try updated_bytes.appendSlice(allocator, line);
                     try maybeAppendNewline(allocator, &updated_bytes, &lines);
                 },
@@ -656,18 +656,18 @@ fn matchesTag(
     return null;
 }
 
-const ChunkStatus = enum {
+const SliceStatus = enum {
     updated,
     updated_with_conflicts,
     untouched,
-    not_a_chunk,
+    not_a_slice,
 };
 
 const FetchError = error{
     HttpError,
 };
 
-fn skipBlockUntouched(
+fn skipSliceUntouched(
     allocator: std.mem.Allocator,
     fc: *FileContext,
     action: Action,
@@ -675,7 +675,7 @@ fn skipBlockUntouched(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     indent: Indent,
-) !ChunkStatus {
+) !SliceStatus {
     if (action == .track or action == .check_freeze) {
         const current_start = current_line.ptr - lines.buffer.ptr;
         const end_line = skipToEndLine(
@@ -696,7 +696,7 @@ fn skipBlockUntouched(
     return .untouched;
 }
 
-fn skipBlockAfterFetchError(
+fn skipSliceAfterFetchError(
     allocator: std.mem.Allocator,
     fc: *FileContext,
     action: Action,
@@ -704,13 +704,13 @@ fn skipBlockAfterFetchError(
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
     indent: Indent,
-) !ChunkStatus {
-    std.log.warn("{s}[{d}]: Leaving {s} chunk untouched after fetch failure", .{
+) !SliceStatus {
+    std.log.warn("{s}[{d}]: Leaving {s} slice untouched after fetch failure", .{
         fc.name,
         fc.line_number,
         @tagName(action),
     });
-    return skipBlockUntouched(
+    return skipSliceUntouched(
         allocator,
         fc,
         action,
@@ -721,7 +721,7 @@ fn skipBlockAfterFetchError(
     );
 }
 
-fn readCurrentChunk(
+fn readCurrentSlice(
     fc: *FileContext,
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
@@ -737,26 +737,26 @@ fn readCurrentChunk(
     return lines.buffer[current_start..current_end];
 }
 
-fn updateChunk(
+fn updateSlice(
     allocator: std.mem.Allocator,
     ctx: GlobalContext,
     fc: *FileContext,
     updated_bytes: *std.ArrayList(u8),
     lines: *std.mem.SplitIterator(u8, .scalar),
     current_line: []const u8,
-) !ChunkStatus {
+) !SliceStatus {
     // Check if matches tag
     const maybe_match = matchesTag(fc, current_line);
 
     if (maybe_match == null) {
-        return .not_a_chunk;
+        return .not_a_slice;
     }
 
     const match = maybe_match.?;
-    // skipToEndLine advances fc.line_number past the block; keep the begin line for reporting
+    // skipToEndLine advances fc.line_number past the slice; keep the begin line for reporting
     const begin_line_number = fc.line_number;
     const prefix = match.prefix;
-    var indent: Indent = getChunkIndent(fc, match.indent);
+    var indent: Indent = getSliceIndent(fc, match.indent);
     var base_indent: Indent = fc.settings.base_indent;
     var new_indent: Indent = fc.settings.new_indent;
 
@@ -786,7 +786,7 @@ fn updateChunk(
     while (line_args.next()) |arg| {
         if (std.mem.eql(u8, arg, "end")) {
             std.debug.panic(
-                "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv chunk\n",
+                "{s}[{d}]: Unexpected 'copyv: end' outside of a copyv slice\n",
                 .{ fc.name, fc.line_number },
             );
         } else if (std.mem.eql(u8, arg, "indent") or std.mem.eql(u8, arg, "our-indent")) {
@@ -827,7 +827,7 @@ fn updateChunk(
         } else if (std.mem.startsWith(u8, arg, "https://")) {
             if (has_command) {
                 std.debug.panic(
-                    "{s}[{d}]: Unexpected URL after command. Command must either follow URL (applies only to that block), or be on a separate line (applies to all following blocks in the file)\n",
+                    "{s}[{d}]: Unexpected URL after command. Command must either follow URL (applies only to that slice), or be on a separate line (applies to all following slices in the file)\n",
                     .{ fc.name, fc.line_number },
                 );
             }
@@ -856,29 +856,29 @@ fn updateChunk(
         return .untouched;
     }
 
-    var chunk_action: Action = .get;
+    var slice_action: Action = .get;
 
     while (line_args.next()) |command| {
         if (std.mem.eql(u8, command, "begin")) {
-            if (chunk_action != .check_freeze) {
-                chunk_action = .track;
+            if (slice_action != .check_freeze) {
+                slice_action = .track;
             }
         } else if (std.mem.eql(u8, command, "freeze")) {
-            chunk_action = .check_freeze;
+            slice_action = .check_freeze;
         } else if (std.mem.startsWith(u8, command, "gf")) { // get freeze
-            chunk_action = .get_freeze;
+            slice_action = .get_freeze;
         } else if (std.mem.startsWith(u8, command, "g")) { // get
             if (line_args.peek()) |peek| {
                 if (std.mem.startsWith(u8, peek, "f")) { // freeze
-                    chunk_action = .get_freeze;
+                    slice_action = .get_freeze;
 
                     // Consume peeked arg
                     _ = line_args.next();
                 } else {
-                    chunk_action = .get;
+                    slice_action = .get;
                 }
             } else {
-                chunk_action = .get;
+                slice_action = .get;
             }
         } else if (std.mem.eql(u8, command, "indent") or std.mem.eql(u8, command, "our-indent")) {
             handleIndentCommands(
@@ -921,7 +921,7 @@ fn updateChunk(
     const action: Action = if (fc.settings.freeze)
         .check_freeze
     else
-        chunk_action;
+        slice_action;
 
     const after_protocol = url_with_line_numbers["https://".len..];
     const host_end = std.mem.indexOfScalar(u8, after_protocol, '/') orelse {
@@ -961,7 +961,7 @@ fn updateChunk(
             );
         }
 
-        return skipBlockUntouched(
+        return skipSliceUntouched(
             allocator,
             fc,
             action,
@@ -1000,7 +1000,7 @@ fn updateChunk(
         ref
     else
         fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, ref) catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockAfterFetchError(
+            FetchError.HttpError => return skipSliceAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -1021,7 +1021,7 @@ fn updateChunk(
         base_sha,
         path,
     ) catch |err| switch (err) {
-        FetchError.HttpError => return skipBlockAfterFetchError(
+        FetchError.HttpError => return skipSliceAfterFetchError(
             allocator,
             fc,
             action,
@@ -1032,7 +1032,7 @@ fn updateChunk(
         ),
         else => return err,
     };
-    // Chunk contents are canonicalized to LF so diffing and merging never see
+    // Slice contents are canonicalized to LF so diffing and merging never see
     // line-ending mismatches; the file's ending is restored at write-back.
     const base_data = try eol_module.convert(allocator, base_file.data, .lf);
     const base_bytes = if (whole_file)
@@ -1059,7 +1059,7 @@ fn updateChunk(
         base_sha
     else
         fetchLatestCommitSha(allocator, ctx.io, ctx.environ, ctx.sha_cache, platform, repo, "HEAD") catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockAfterFetchError(
+            FetchError.HttpError => return skipSliceAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -1073,14 +1073,14 @@ fn updateChunk(
 
     var new_start: usize = undefined;
     var new_end: usize = undefined;
-    var updated_chunk: []const u8 = undefined;
+    var updated_slice: []const u8 = undefined;
     var has_conflicts = false;
     var suspicious_lines: []const usize = &.{};
-    var block_changed = false;
+    var slice_changed = false;
 
     if (std.mem.eql(u8, new_sha, base_sha)) {
         if (action == .track and ctx.update_mode != .all) {
-            return skipBlockUntouched(
+            return skipSliceUntouched(
                 allocator,
                 fc,
                 action,
@@ -1094,14 +1094,14 @@ fn updateChunk(
         new_end = base_end;
         switch (action) {
             .get, .get_freeze => {
-                updated_chunk = base_indented.items;
+                updated_slice = base_indented.items;
                 suspicious_lines = base_suspicious.items;
-                block_changed = true;
+                slice_changed = true;
             },
             .track => {
-                updated_chunk = try eol_module.canonicalizeChunk(
+                updated_slice = try eol_module.canonicalize(
                     allocator,
-                    readCurrentChunk(fc, lines, current_line, indent),
+                    readCurrentSlice(fc, lines, current_line, indent),
                 );
             },
             else => unreachable,
@@ -1117,7 +1117,7 @@ fn updateChunk(
             new_sha,
             path,
         ) catch |err| switch (err) {
-            FetchError.HttpError => return skipBlockAfterFetchError(
+            FetchError.HttpError => return skipSliceAfterFetchError(
                 allocator,
                 fc,
                 action,
@@ -1151,14 +1151,14 @@ fn updateChunk(
                 .stderr_limit = .limited(max_file_bytes),
             });
 
-            // Check if diff is in the chunk
+            // Check if diff is in the slice
 
             var diff_lines = std.mem.splitScalar(u8, diff_result.stdout, '\n');
             var base_line: usize = 0;
             var new_line: usize = 0;
             var base_range: GitRange = .{ .start = 0, .len = 0 };
             var new_range: GitRange = .{ .start = 0, .len = 0 };
-            var has_diff_in_chunk = false;
+            var has_diff_in_slice = false;
 
             for (0..4) |_| _ = diff_lines.next(); // Skip diff header
 
@@ -1179,7 +1179,7 @@ fn updateChunk(
                         (base_line < base_start and base_start < base_range_end) or
                         (base_start < base_line and base_line < base_end))
                     {
-                        has_diff_in_chunk = true;
+                        has_diff_in_slice = true;
                     }
 
                     if (new_start == 0 and base_line > base_start) {
@@ -1210,28 +1210,28 @@ fn updateChunk(
                     new_end = new_line;
                 } else if (base_line == base_end + 1) {
                     // In case there's a series of '-' lines followed by a series of
-                    // '+' lines right at the end of the chunk, we want to capture
+                    // '+' lines right at the end of the slice, we want to capture
                     // that, so we need this extra check.
 
                     new_end = new_line - 1;
                 }
             }
 
-            if (has_diff_in_chunk) {
-                // We've at least set the start because the diff affected the chunk
+            if (has_diff_in_slice) {
+                // We've at least set the start because the diff affected the slice
                 std.debug.assert(new_start != 0);
 
                 if (new_end == 0) {
-                    // The only diffs were before the end of this chunk
+                    // The only diffs were before the end of this slice
                     std.debug.assert(base_line < base_end);
                     const delta = @as(isize, @intCast(new_line)) - @as(isize, @intCast(base_line));
                     new_end = @intCast(@as(isize, @intCast(base_end)) + delta);
                 }
             } else {
-                // None of the diffs affected the chunk
+                // None of the diffs affected the slice
 
                 if (new_start == 0) {
-                    // The chunk falls entirely after the last hunk, so apply
+                    // The slice falls entirely after the last hunk, so apply
                     // the cumulative shift accumulated through all hunks.
                     std.debug.assert(new_end == 0);
                     const delta = @as(isize, @intCast(new_line)) - @as(isize, @intCast(base_line));
@@ -1262,7 +1262,7 @@ fn updateChunk(
             (base_start != new_start or base_end != new_end);
         const should_update = shouldUpdate(ctx.update_mode, action, content_changed, lines_changed);
         if (!should_update) {
-            return skipBlockUntouched(
+            return skipSliceUntouched(
                 allocator,
                 fc,
                 action,
@@ -1275,38 +1275,38 @@ fn updateChunk(
 
         try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "base", .data = base_indented.items });
         try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "new", .data = new_indented.items });
-        var base_chunk_path_buffer: [1024]u8 = undefined;
-        var new_chunk_path_buffer: [1024]u8 = undefined;
-        const base_chunk_path_len = try ctx.cache_dir.realPathFile(ctx.io, "base", &base_chunk_path_buffer);
-        const new_chunk_path_len = try ctx.cache_dir.realPathFile(ctx.io, "new", &new_chunk_path_buffer);
-        const base_chunk_path = base_chunk_path_buffer[0..base_chunk_path_len];
-        const new_chunk_path = new_chunk_path_buffer[0..new_chunk_path_len];
+        var base_slice_path_buffer: [1024]u8 = undefined;
+        var new_slice_path_buffer: [1024]u8 = undefined;
+        const base_slice_path_len = try ctx.cache_dir.realPathFile(ctx.io, "base", &base_slice_path_buffer);
+        const new_slice_path_len = try ctx.cache_dir.realPathFile(ctx.io, "new", &new_slice_path_buffer);
+        const base_slice_path = base_slice_path_buffer[0..base_slice_path_len];
+        const new_slice_path = new_slice_path_buffer[0..new_slice_path_len];
 
-        // Determine updated chunk bytes
+        // Determine updated slice bytes
 
-        const current_chunk = if (action == .track)
-            try eol_module.canonicalizeChunk(
+        const current_slice = if (action == .track)
+            try eol_module.canonicalize(
                 allocator,
-                readCurrentChunk(fc, lines, current_line, indent),
+                readCurrentSlice(fc, lines, current_line, indent),
             )
         else
             undefined;
 
-        if (action == .get or std.mem.eql(u8, current_chunk, base_indented.items)) {
-            updated_chunk = new_indented.items;
+        if (action == .get or std.mem.eql(u8, current_slice, base_indented.items)) {
+            updated_slice = new_indented.items;
             suspicious_lines = new_suspicious.items;
-            block_changed = action == .get or !std.mem.eql(u8, current_chunk, new_indented.items);
+            slice_changed = action == .get or !std.mem.eql(u8, current_slice, new_indented.items);
         } else {
             std.log.info("Merging file: {s}[{d}]", .{ fc.name, begin_line_number });
             std.debug.assert(action == .track);
-            try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "current", .data = current_chunk });
-            var current_chunk_path_buffer: [1024]u8 = undefined;
-            const current_chunk_path_len = try ctx.cache_dir.realPathFile(
+            try ctx.cache_dir.writeFile(ctx.io, .{ .sub_path = "current", .data = current_slice });
+            var current_slice_path_buffer: [1024]u8 = undefined;
+            const current_slice_path_len = try ctx.cache_dir.realPathFile(
                 ctx.io,
                 "current",
-                &current_chunk_path_buffer,
+                &current_slice_path_buffer,
             );
-            const current_chunk_path = current_chunk_path_buffer[0..current_chunk_path_len];
+            const current_slice_path = current_slice_path_buffer[0..current_slice_path_len];
 
             const config_result = try std.process.run(allocator, ctx.io, .{
                 .argv = &.{ "git", "config", "--get", "merge.conflictstyle" },
@@ -1337,9 +1337,9 @@ fn updateChunk(
             try merge_args.appendSlice(
                 allocator,
                 &[_][]const u8{
-                    current_chunk_path,
-                    base_chunk_path,
-                    new_chunk_path,
+                    current_slice_path,
+                    base_slice_path,
+                    new_slice_path,
                 },
             );
 
@@ -1348,9 +1348,9 @@ fn updateChunk(
                 .stdout_limit = .limited(max_file_bytes),
                 .stderr_limit = .limited(max_file_bytes),
             });
-            updated_chunk = merge_result.stdout;
+            updated_slice = merge_result.stdout;
             suspicious_lines = new_suspicious.items;
-            block_changed = !std.mem.eql(u8, updated_chunk, current_chunk);
+            slice_changed = !std.mem.eql(u8, updated_slice, current_slice);
 
             switch (merge_result.term) {
                 .exited => |code| {
@@ -1473,7 +1473,7 @@ fn updateChunk(
     };
     try appendTag(allocator, updated_bytes, indent, match.comment, begin);
     try updated_bytes.appendSlice(allocator, fc.eol.bytes());
-    if (block_changed and suspicious_lines.len > 0) {
+    if (slice_changed and suspicious_lines.len > 0) {
         const first_body_line = std.mem.count(u8, updated_bytes.items, "\n") + 1;
         const ranges = try indent_module.formatLineRanges(allocator, suspicious_lines, first_body_line - 1);
         std.log.warn("{s}[{d}]: suspicious reindent (indent shifted beyond start delta) near lines {s}", .{
@@ -1482,7 +1482,7 @@ fn updateChunk(
             ranges,
         });
     }
-    try updated_bytes.appendSlice(allocator, try eol_module.convert(allocator, updated_chunk, fc.eol));
+    try updated_bytes.appendSlice(allocator, try eol_module.convert(allocator, updated_slice, fc.eol));
     try updated_bytes.appendSlice(allocator, fc.eol.bytes());
     try appendTag(allocator, updated_bytes, indent, fc.type_info.comments[0], "end");
     if (lines.peek() != null) {
@@ -1503,7 +1503,7 @@ fn appendTag(
     comment: Comment,
     contents: []const u8,
 ) !void {
-    try updated_bytes.appendSlice(allocator, indent.start_slice);
+    try updated_bytes.appendSlice(allocator, indent.start_chars);
     switch (comment) {
         .line => |line_comment| {
             try updated_bytes.appendSlice(allocator, line_comment);
@@ -1862,7 +1862,7 @@ fn getLines(bytes: []const u8, start_line: usize, end_line: usize) []const u8 {
     return bytes[start..end];
 }
 
-test "getLines returns an empty slice for a deleted range" {
+test "getLines returns empty bytes for a deleted range" {
     const bytes = "one\ntwo\nthree";
     const empty_middle = getLines(bytes, 2, 1);
     const empty_at_end = getLines(bytes, 4, 3);
@@ -1886,7 +1886,7 @@ fn skipToEndLine(
 
         const maybe_match = matchesTag(fc, line);
         if (maybe_match) |match| {
-            if (!std.mem.eql(u8, match.indent, indent.start_slice)) continue;
+            if (!std.mem.eql(u8, match.indent, indent.start_chars)) continue;
 
             const payload = std.mem.trimEnd(u8, line[match.prefix.len..], line_whitespace);
             var line_args = std.mem.splitScalar(u8, payload, ' ');
@@ -1916,14 +1916,14 @@ fn skipToEndLine(
     };
 }
 
-fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
+fn getSliceIndent(fc: *FileContext, indent_chars: []const u8) Indent {
     const file_indent = &fc.settings.current_indent;
     var start_width: ?usize = null;
 
     if (file_indent.enabled) {
         indent_module.detect(indentContext(fc), file_indent, fc.bytes);
         start_width = indent_module.getIndentStart(
-            indent_slice,
+            indent_chars,
             file_indent.width.?,
         );
         if (fc.debug_indent != .off) {
@@ -1937,7 +1937,7 @@ fn getChunkIndent(fc: *FileContext, indent_slice: []const u8) Indent {
 
     return .{
         .enabled = file_indent.enabled,
-        .start_slice = indent_slice,
+        .start_chars = indent_chars,
         .start_width = start_width,
         .width = file_indent.width,
         .char = file_indent.char,
@@ -2120,7 +2120,7 @@ pub fn main(init: std.process.Init) !void {
     if (force_eol != null and update_mode != .all) {
         std.debug.panic(
             "--force-lf/--force-crlf cannot be combined with --changed or " ++
-                "--changed-or-moved: those modes leave unchanged chunks untouched, " ++
+                "--changed-or-moved: those modes leave unchanged slices untouched, " ++
                 "so stale line endings would not be rewritten\n",
             .{},
         );

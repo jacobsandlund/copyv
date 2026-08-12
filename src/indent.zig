@@ -4,7 +4,7 @@ pub const DebugIndent = enum { off, basic, verbose };
 pub const FileTypeIndentDefault = struct { width: u8, char: u8 };
 pub const Indent = struct {
     enabled: bool = true,
-    start_slice: []const u8 = "",
+    start_chars: []const u8 = "",
     start_width: ?usize = null,
     width: ?usize = null,
     char: ?u8 = null,
@@ -33,16 +33,16 @@ pub fn detect(context: Context, indent: *Indent, bytes: []const u8) void {
     detectInFile(context, indent, bytes, bytes);
 }
 
-/// Detects indentation for `block`, a subslice of `file` starting at a line
-/// boundary. `start_width` comes from the block itself, while `char` and
-/// `width` scan the block's lines first and then the rest of the file
-/// (wrapping around to line 1), so a short block inherits evidence from its
+/// Detects indentation for `slice`, a region of `file` starting at a line
+/// boundary. `start_width` comes from the slice itself, while `char` and
+/// `width` scan the slice's lines first and then the rest of the file
+/// (wrapping around to line 1), so a short slice inherits evidence from its
 /// surroundings instead of falling back to the file type default.
-pub fn detectInFile(context: Context, indent: *Indent, file: []const u8, block: []const u8) void {
-    const offset = block.ptr - file.ptr;
-    std.debug.assert(offset + block.len <= file.len);
+pub fn detectInFile(context: Context, indent: *Indent, file: []const u8, slice: []const u8) void {
+    const offset = slice.ptr - file.ptr;
+    std.debug.assert(offset + slice.len <= file.len);
     if (indent.char == null) detectChar(context, indent, file, offset);
-    if (indent.start_width == null) detectStart(context, indent, block);
+    if (indent.start_width == null) detectStart(context, indent, slice);
     if (indent.width == null) detectWidth(context, indent, file, offset);
 }
 
@@ -535,7 +535,7 @@ test "detection stops at max_lines_to_check" {
     try std.testing.expectEqual(4, indent.width.?);
 }
 
-test "short block inherits width evidence from the rest of the file" {
+test "short slice inherits width evidence from the rest of the file" {
     const file =
         "function a() {\n" ++
         "    one;\n" ++
@@ -548,9 +548,9 @@ test "short block inherits width evidence from the rest of the file" {
         "        y;\n" ++
         "}\n";
     const offset = std.mem.indexOf(u8, file, "function target").?;
-    var block_only: Indent = .{};
-    detect(.{ .file_type = .{ .width = 2, .char = ' ' } }, &block_only, file[offset..]);
-    try std.testing.expectEqual(2, block_only.width.?);
+    var slice_only: Indent = .{};
+    detect(.{ .file_type = .{ .width = 2, .char = ' ' } }, &slice_only, file[offset..]);
+    try std.testing.expectEqual(2, slice_only.width.?);
 
     var indent: Indent = .{};
     detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[offset..]);
@@ -558,7 +558,7 @@ test "short block inherits width evidence from the rest of the file" {
     try std.testing.expectEqual(0, indent.start_width.?);
 }
 
-test "block start width comes from the block, not the file" {
+test "slice start width comes from the slice, not the file" {
     const file = "class A {\n    method() {\n        body;\n    }\n}\n";
     const offset = std.mem.indexOf(u8, file, "    method").?;
     const end = std.mem.indexOf(u8, file, "\n}").? + 1;
@@ -575,16 +575,16 @@ test "wrap seam between file end and file start is not counted as a shift" {
     try std.testing.expectEqual(2, indent.width.?);
 }
 
-test "block with strong evidence wins over a differently indented file" {
+test "slice with strong evidence wins over a differently indented file" {
     const head = "r\n  a\n" ** 8;
-    const block = "r\n    a\n" ** 6;
-    const file = head ++ block;
+    const slice = "r\n    a\n" ** 6;
+    const file = head ++ slice;
     var indent: Indent = .{};
     detectInFile(.{ .file_type = .{ .width = 2, .char = ' ' } }, &indent, file, file[head.len..]);
     try std.testing.expectEqual(4, indent.width.?);
 }
 
-test "block char falls back to surrounding file evidence" {
+test "slice char falls back to surrounding file evidence" {
     const head = "r\n\ta\n" ** 5;
     const file = head ++ "flat\n\tb\n";
     var indent: Indent = .{};
@@ -613,7 +613,7 @@ test "carriage returns survive reindenting" {
     try std.testing.expectEqualStrings("  one\r\n\r\n", shifted);
 }
 
-test "match collects suspicious chunk-relative line numbers" {
+test "match collects suspicious slice-relative line numbers" {
     const context: Context = .{ .file_type = .{ .width = 4, .char = ' ' } };
     var suspicious: std.ArrayList(usize) = .empty;
     defer suspicious.deinit(std.testing.allocator);

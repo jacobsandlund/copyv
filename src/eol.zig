@@ -45,13 +45,13 @@ pub fn convert(allocator: std.mem.Allocator, input: []const u8, eol: Eol) ![]con
     }
 }
 
-// A chunk slice ends just before a '\n'; a trailing '\r' belongs to that line
-// terminator, not the chunk.
-pub fn canonicalizeChunk(allocator: std.mem.Allocator, chunk: []const u8) ![]const u8 {
-    const trimmed = if (chunk.len > 0 and chunk[chunk.len - 1] == '\r')
-        chunk[0 .. chunk.len - 1]
+// A slice ends just before a '\n'; a trailing '\r' belongs to that line
+// terminator, not the slice.
+pub fn canonicalize(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    const trimmed = if (bytes.len > 0 and bytes[bytes.len - 1] == '\r')
+        bytes[0 .. bytes.len - 1]
     else
-        chunk;
+        bytes;
     return convert(allocator, trimmed, .lf);
 }
 
@@ -76,12 +76,12 @@ test "convert to crlf adds returns to bare newlines" {
     try std.testing.expectEqualStrings("one\r\ntwo\r\nlone\rreturn\r\n", converted);
 }
 
-test "canonicalizeChunk drops the trailing terminator remnant" {
-    const canonical = try canonicalizeChunk(std.testing.allocator, "one\r\ntwo\r");
+test "canonicalize drops the trailing terminator remnant" {
+    const canonical = try canonicalize(std.testing.allocator, "one\r\ntwo\r");
     defer std.testing.allocator.free(canonical);
     try std.testing.expectEqualStrings("one\ntwo", canonical);
 
-    const empty = try canonicalizeChunk(std.testing.allocator, "\r");
+    const empty = try canonicalize(std.testing.allocator, "\r");
     try std.testing.expectEqualStrings("", empty);
 }
 
