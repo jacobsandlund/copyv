@@ -47,17 +47,23 @@ keeps in sync with its source. A slice is whatever the URL selects — part of a
 function, one whole function, several of them, or the entire file when the URL
 carries no line numbers.
 
-Later, when the upstream config improves, run `copyv` (no args) to update all tagged code:
+Later, when the upstream config improves, run `copyv .` to update every tagged
+slice under the current directory:
 
 ```console
-$ copyv
+$ copyv .
 ```
+
+Directories are searched recursively, so `copyv .` is the usual way to update
+everything. Run `copyv --help` (or `copyv` with no arguments) to see all
+options.
 
 Use `copyv --changed` to rewrite only slices whose source content changed. This
 leaves a slice completely untouched when only its commit SHA or line numbers
 changed. Use `copyv --changed-or-moved` to also rewrite slices whose source
 moved to different line numbers, while still ignoring SHA-only changes. Options
-must appear before file arguments.
+may appear before or after paths; `--` ends option parsing, for the rare path
+that starts with `-`.
 
 Slices match the line endings of the file they live in: copyv detects whether
 the destination file predominantly uses LF or CRLF and converts copied code to

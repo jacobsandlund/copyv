@@ -10,9 +10,9 @@ A **slice** is the unit this tool operates on: the region of a file between a `c
 
 ## Build & Commands
 
-* Build and run with: `zig build run`
+* Build and run with: `zig build run -- .` (`copyv` with no paths prints usage)
 
-Right now, use `zig build run` and check the diff of changes in `examples` (except for minor changes like adding new `file_type_info_map` entries).
+Right now, use `zig build run -- .` and check the diff of changes in `examples` (except for minor changes like adding new `file_type_info_map` entries).
 
 ## Code
 

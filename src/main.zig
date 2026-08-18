@@ -2002,10 +2002,140 @@ test {
     _ = eol_module;
 }
 
+const usage_text =
+    \\Usage: copyv [options] [<path>...]
+    \\
+    \\Updates every copyv slice in the given files and directories, pulling in the
+    \\latest changes from each slice's source. Directories are searched
+    \\recursively, so `copyv .` updates every slice under the current directory.
+    \\
+    \\Options:
+    \\  -h, --help                    Print this help and exit
+    \\      --changed                 Rewrite only slices whose source content
+    \\                                changed, leaving a slice untouched when only
+    \\                                its commit SHA or line numbers changed
+    \\      --changed-or-moved        Also rewrite slices whose source moved to
+    \\                                different line numbers
+    \\      --force-lf                Write every visited slice with LF endings
+    \\      --force-crlf              Write every visited slice with CRLF endings
+    \\      --platform=<host>         Update only slices from <host> (repeatable)
+    \\      --no-platform=<host>      Skip slices from <host> (repeatable)
+    \\      --verbose                 Log each file and slice as it is visited
+    \\      --debug-indent[=<level>]  Log indent detection, where <level> is
+    \\                                `basic` (the default) or `verbose`
+    \\
+    \\<host> is one of: github.com, gitlab.com, codeberg.org
+    \\
+    \\Options may appear before or after paths; `--` ends option parsing.
+    \\
+;
+
+fn printUsage(io: std.Io, file: std.Io.File) void {
+    var buffer: [256]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &buffer);
+    file_writer.interface.writeAll(usage_text) catch {};
+    file_writer.interface.flush() catch {};
+}
+
+fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
+    std.log.err(fmt, args);
+    std.process.exit(1);
+}
+
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena;
     const io = init.io;
     const cwd = std.Io.Dir.cwd();
+
+    // `updateFile` resets the arena after every file, so argument memory that
+    // has to outlive the update loop comes from the general purpose allocator.
+    const gpa = init.gpa;
+
+    var arg_it = try init.minimal.args.iterateAllocator(gpa);
+    defer arg_it.deinit();
+    _ = arg_it.next();
+
+    var blacklist = PlatformFilter.blacklist_default;
+    var whitelist = PlatformFilter.whitelist_default;
+    var current_filter: *PlatformFilter = &blacklist;
+    var debug_indent: DebugIndent = .off;
+    var verbose = false;
+    var update_mode: UpdateMode = .all;
+    var force_eol: ?Eol = null;
+    var paths: std.ArrayList([]const u8) = .empty;
+    defer paths.deinit(gpa);
+    var options_ended = false;
+
+    while (arg_it.next()) |arg| {
+        if (options_ended or !std.mem.startsWith(u8, arg, "-")) {
+            try paths.append(gpa, arg);
+            continue;
+        }
+
+        const is_platform = std.mem.startsWith(u8, arg, "--platform");
+        const is_no_platform = !is_platform and std.mem.startsWith(u8, arg, "--no-platform");
+
+        if (std.mem.eql(u8, arg, "--")) {
+            options_ended = true;
+        } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            printUsage(io, std.Io.File.stdout());
+            return;
+        } else if (is_platform or is_no_platform) {
+            const enable = is_platform;
+            if (enable) current_filter = &whitelist;
+
+            const host = if (std.mem.indexOf(u8, arg, "=")) |eq_idx|
+                arg[eq_idx + 1 ..]
+            else
+                arg_it.next() orelse fatal("{s} requires a value", .{arg});
+
+            const platform = Platform.parse(host) catch {
+                fatal("Unknown platform: {s}", .{host});
+            };
+            current_filter.setPlatform(platform, enable);
+        } else if (std.mem.eql(u8, arg, "--debug-indent")) {
+            debug_indent = .basic;
+        } else if (std.mem.startsWith(u8, arg, "--debug-indent=")) {
+            const value = arg["--debug-indent=".len..];
+            if (std.mem.eql(u8, value, "verbose")) {
+                debug_indent = .verbose;
+            } else if (std.mem.eql(u8, value, "basic")) {
+                debug_indent = .basic;
+            } else {
+                fatal("Unknown --debug-indent value: {s}", .{value});
+            }
+        } else if (std.mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
+        } else if (std.mem.eql(u8, arg, "--changed") or
+            std.mem.eql(u8, arg, "--changes"))
+        {
+            update_mode = .changed;
+        } else if (std.mem.eql(u8, arg, "--changed-or-moved") or
+            std.mem.eql(u8, arg, "--changes-or-moves"))
+        {
+            update_mode = .changed_or_moved;
+        } else if (std.mem.eql(u8, arg, "--force-lf")) {
+            force_eol = .lf;
+        } else if (std.mem.eql(u8, arg, "--force-crlf")) {
+            force_eol = .crlf;
+        } else {
+            fatal("Unknown option: {s}", .{arg});
+        }
+    }
+
+    if (paths.items.len == 0) {
+        printUsage(io, std.Io.File.stdout());
+        std.process.exit(1);
+    }
+
+    if (force_eol != null and update_mode != .all) {
+        fatal(
+            "--force-lf/--force-crlf cannot be combined with --changed or " ++
+                "--changed-or-moved: those modes leave unchanged slices untouched, " ++
+                "so stale line endings would not be rewritten",
+            .{},
+        );
+    }
 
     // Find repo root by walking up parent directories looking for .git
     var repo_root = cwd;
@@ -2045,86 +2175,8 @@ pub fn main(init: std.process.Init) !void {
     };
     const cache_dir = try repo_root.openDir(io, cache_dir_name, .{});
 
-    const allocator = arena.allocator();
-
     var sha_cache = ShaCache.init(std.heap.page_allocator);
     defer sha_cache.deinit();
-
-    var arg_it = try init.minimal.args.iterateAllocator(allocator);
-    defer arg_it.deinit();
-    _ = arg_it.next();
-
-    var blacklist = PlatformFilter.blacklist_default;
-    var whitelist = PlatformFilter.whitelist_default;
-    var current_filter: *PlatformFilter = &blacklist;
-    var debug_indent: DebugIndent = .off;
-    var verbose = false;
-    var update_mode: UpdateMode = .all;
-    var force_eol: ?Eol = null;
-    var name: []const u8 = ".";
-    var kind: std.Io.File.Kind = .directory;
-
-    while (arg_it.next()) |arg| {
-        const is_platform = std.mem.startsWith(u8, arg, "--platform");
-        const is_no_platform = !is_platform and std.mem.startsWith(u8, arg, "--no-platform");
-
-        if (is_platform or is_no_platform) {
-            const enable = is_platform;
-            if (enable) current_filter = &whitelist;
-
-            const host = if (std.mem.indexOf(u8, arg, "=")) |eq_idx|
-                arg[eq_idx + 1 ..]
-            else
-                arg_it.next() orelse
-                    std.debug.panic("{s} requires a value\n", .{arg});
-
-            const platform = Platform.parse(host) catch {
-                std.debug.panic("Unknown platform: {s}\n", .{host});
-            };
-            current_filter.setPlatform(platform, enable);
-        } else if (std.mem.eql(u8, arg, "--debug-indent")) {
-            debug_indent = .basic;
-        } else if (std.mem.startsWith(u8, arg, "--debug-indent=")) {
-            const value = arg["--debug-indent=".len..];
-            if (std.mem.eql(u8, value, "verbose")) {
-                debug_indent = .verbose;
-            } else if (std.mem.eql(u8, value, "basic")) {
-                debug_indent = .basic;
-            } else {
-                std.debug.panic("Unknown --debug-indent value: {s}\n", .{value});
-            }
-        } else if (std.mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
-        } else if (std.mem.eql(u8, arg, "--changed") or
-            std.mem.eql(u8, arg, "--changes"))
-        {
-            update_mode = .changed;
-        } else if (std.mem.eql(u8, arg, "--changed-or-moved") or
-            std.mem.eql(u8, arg, "--changes-or-moves"))
-        {
-            update_mode = .changed_or_moved;
-        } else if (std.mem.eql(u8, arg, "--force-lf")) {
-            force_eol = .lf;
-        } else if (std.mem.eql(u8, arg, "--force-crlf")) {
-            force_eol = .crlf;
-        } else if (std.mem.startsWith(u8, arg, "-")) {
-            std.debug.panic("Unknown option: {s}\n", .{arg});
-        } else {
-            name = arg;
-            const stat = try cwd.statFile(io, arg, .{});
-            kind = stat.kind;
-            break;
-        }
-    }
-
-    if (force_eol != null and update_mode != .all) {
-        std.debug.panic(
-            "--force-lf/--force-crlf cannot be combined with --changed or " ++
-                "--changed-or-moved: those modes leave unchanged slices untouched, " ++
-                "so stale line endings would not be rewritten\n",
-            .{},
-        );
-    }
 
     const ctx = GlobalContext{
         .arena = arena,
@@ -2140,19 +2192,11 @@ pub fn main(init: std.process.Init) !void {
         .force_eol = force_eol,
     };
 
-    try recursivelyUpdate(ctx, cwd, name, kind);
-
-    while (arg_it.next()) |arg| {
-        const stat = cwd.statFile(io, arg, .{}) catch |err| switch (err) {
-            error.FileNotFound => {
-                if (std.mem.startsWith(u8, arg, "-")) {
-                    std.debug.panic("Options must be specified before the first file (or this file isn't found): {s}\n", .{arg});
-                }
-                return err;
-            },
-            else => |e| return e,
+    for (paths.items) |path| {
+        const stat = cwd.statFile(io, path, .{}) catch |err| {
+            fatal("Cannot open {s}: {t}", .{ path, err });
         };
 
-        try recursivelyUpdate(ctx, cwd, arg, stat.kind);
+        try recursivelyUpdate(ctx, cwd, path, stat.kind);
     }
 }
